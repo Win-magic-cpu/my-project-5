@@ -1,0 +1,210 @@
+slots:
+  order_number:
+    type: text
+    label: 订单号
+    description: 用户的订单号
+  order_status:
+    type: text
+    label: 订单状态
+    description: 订单当前状态
+  order_summary:
+    type: text
+    label: 订单摘要
+    description: 订单金额等摘要信息
+  tracking_number:
+    type: text
+    label: 物流单号
+    description: 快递单号
+  logistics_company:
+    type: text
+    label: 物流公司
+    description: 承运的物流公司
+  logistics_status:
+    type: text
+    label: 物流状态
+    description: 当前物流进度
+  refund_reason:
+    type: text
+    label: 退款原因
+    description: 用户填写的退款原因
+  product_id:
+    type: text
+    label: 商品编号
+    description: 商品唯一标识
+  recommendation_summary:
+    type: text
+    label: 推荐说明
+    description: 相似商品推荐结果说明
+
+flows:
+  order_status_query:
+    name: 订单状态查询
+    description: 帮用户查询订单当前的处理状态，需要订单号。
+    steps:
+      - id: start
+        type: start
+        description: 进入订单状态查询流程
+        next: ask_order_number
+
+      - id: ask_order_number
+        type: collect
+        description: 收集并校验订单号
+        slot_name: order_number
+        template:
+          text: "请告诉我你的订单号。"
+        validation:
+          condition: "len(slots.get('order_number') or '') >= 4"
+          failure_template:
+            text: "订单号看起来不太对，请重新输入完整订单号。"
+        next: lookup_order_status
+
+      - id: lookup_order_status
+        type: action
+        description: 调用电商服务查询订单状态
+        action: action_lookup_order_status
+        next: show_order_status
+
+      - id: show_order_status
+        type: response
+        description: 回复订单状态查询结果
+        template:
+          text: "订单{{ slots.order_number }}当前状态是：{{ slots.order_status }}。{{ slots.order_summary }}"
+        next: end
+
+      - id: end
+        type: end
+        description: 完成订单状态查询
+        next: []
+
+  logistics_tracking:
+    name: 物流查询
+    description: 帮用户查询订单对应的物流进度，需要订单号。
+    steps:
+      - id: start
+        type: start
+        next: ask_order_number
+
+      - id: ask_order_number
+        type: collect
+        slot_name: order_number
+        template:
+          text: "请告诉我你要查询的订单号。"
+        next: lookup_logistics
+
+      - id: lookup_logistics
+        type: action
+        action: action_lookup_logistics
+        next: show_logistics
+
+      - id: show_logistics
+        type: response
+        template:
+          text: "订单{{ slots.order_number }}的物流信息：{{ slots.logistics_company }}，单号 {{ slots.tracking_number }}，当前状态是{{ slots.logistics_status }}。"
+        next: end
+
+      - id: end
+        type: end
+        next: []
+
+  refund_request:
+    name: 退款申请
+    description: 帮用户提交简单的退款申请，收集订单号和退款原因。
+    steps:
+      - id: start
+        type: start
+        next: ask_order_number
+
+      - id: ask_order_number
+        type: collect
+        slot_name: order_number
+        template:
+          text: "请告诉我你的订单号。"
+        next: ask_refund_reason
+
+      - id: ask_refund_reason
+        type: collect
+        slot_name: refund_reason
+        template:
+          text: "请简单说一下退款原因。"
+        next: refund_submitted
+
+      - id: refund_submitted
+        type: response
+        template:
+          text: "好的，订单{{ slots.order_number }}的退款申请已提交，原因是：{{ slots.refund_reason }}。后续会尽快为你处理。"
+        next: end
+
+      - id: end
+        type: end
+        next: []
+
+  similar_product_recommendation:
+    name: 相似商品推荐
+    description: 基于当前商品为用户推荐类似商品；已选中商品时直接推荐，否则先询问商品编号。
+    steps:
+      - id: start
+        type: start
+        description: 有商品上下文直接推荐，否则先收集商品编号
+        next:
+          - if: "slots.get('product_id')"
+            then: respond
+          - else: ask_product_id
+
+      - id: ask_product_id
+        type: collect
+        slot_name: product_id
+        template:
+          text: "请告诉我你想看的商品编号。"
+        next: respond
+
+      - id: respond
+        type: action
+        action: action_recommend_similar_products
+        next: show_recommendation
+
+      - id: show_recommendation
+        type: response
+        template:
+          text: "{{ slots.recommendation_summary }}"
+        next: end
+
+      - id: end
+        type: end
+        next: []
+
+  onboarding:
+    name: 欢迎引导
+    description: 在聊天窗口初次打开时欢迎用户，并介绍助手可以处理的电商服务。这个流程通常由系统主动触发。
+    steps:
+      - id: start
+        type: start
+        next: respond
+
+      - id: respond
+        type: response
+        template:
+          text: "你好，这里是 ShopMate 电商助手。我可以帮你查订单状态、查物流、了解商品信息，或者提交退款申请。"
+        next: end
+
+      - id: end
+        type: end
+        next: []
+
+  human_handoff:
+    name: 人工客服
+    description: 将当前对话转交给人工客服处理。用户明确要求人工服务时使用。
+    steps:
+      - id: start
+        type: start
+        next: respond
+
+      - id: respond
+        type: response
+        template:
+          text: "好的，我来为你转接人工客服，请稍等。"
+        next: end
+
+      - id: end
+        type: end
+        next: []
+

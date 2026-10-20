@@ -1,0 +1,38 @@
+[project]
+name = "ecommerce-customer-service"
+version = "0.1.0"
+description = "ShopMate：基于 LLM + YAML 流程编排的智能客服对话引擎"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiomysql>=0.3.2",
+    "cryptography>=46.0.7",
+    "fastapi>=0.136.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "langchain>=1.2.15",
+    "langchain-openai>=1.1.14",
+    "pydantic-settings>=2.13.1",
+    "pyyaml>=6.0.3",
+    "sqlalchemy[asyncio]>=2.0.49",
+    "uvicorn>=0.44.0",
+]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.20.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["shopmate"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+norecursedirs = ["pytest-cache-files-*", ".*", "__pycache__"]

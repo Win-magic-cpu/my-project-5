@@ -1,0 +1,221 @@
+import time
+
+from shopmate.chitchat.handler import ChitchatHandler
+from shopmate.clarify.responder import ClarifyResponder
+from shopmate.conf.config import settings
+from shopmate.domain.messages import (
+    BotMessage,
+    MessageType,
+    ProcessResult,
+    UserMessage,
+)
+from shopmate.domain.state import DialogueState, FocusedObject, Turn
+from shopmate.knowledge.handler import KnowledgeHandler
+from shopmate.plan.models import ClarifyReason
+from shopmate.plan.turn_planner import TurnPlanner
+from shopmate.plan.validator import TurnPlanValidator
+from shopmate.task.command.models import Command, SetSlotsCommand
+from shopmate.task.flow.models import FlowCatalog
+from shopmate.task.flow.steps import CollectSlotStep
+from shopmate.task.handler import TaskHandler
+
+
+class DialogueEngine:
+    """一条用户消息进入系统后的对话调度中心。"""
+
+    def __init__(
+        self,
+        turn_planner: TurnPlanner,
+        task_handler: TaskHandler,
+        knowledge_handler: KnowledgeHandler,
+        chitchat_handler: ChitchatHandler,
+        clarify_responder: ClarifyResponder,
+        turn_plan_validator: TurnPlanValidator,
+    ) -> None:
+        self.turn_planner = turn_planner
+        self.task_handler = task_handler
+        self.knowledge_handler = knowledge_handler
+        self.chitchat_handler = chitchat_handler
+        self.clarify_responder = clarify_responder
+        self.turn_plan_validator = turn_plan_validator
+
+    async def process_message(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+    ) -> ProcessResult:
+        self._prepare_session(state)
+        turn = Turn.create(user_message)
+
+        if user_message.type is MessageType.TEXT:
+            messages = await self._handle_text_message(
+                state=state,
+                user_message=user_message,
+            )
+        else:
+            message_object = user_message.object
+            if message_object is None:
+                raise ValueError("对象消息缺少 object 字段。")
+
+            state.shared.set_focused_object(
+                FocusedObject(
+                    type=message_object.type,
+                    id=message_object.id,
+                    title=message_object.title,
+                    attributes=dict(message_object.attributes),
+                )
+            )
+            messages = await self._handle_object_message(
+                message=user_message,
+                state=state,
+            )
+
+        turn.bot_messages.extend(messages)
+        state.shared.append_turn(turn)
+
+        return ProcessResult(
+            sender_id=user_message.sender_id,
+            message_id=user_message.message_id,
+            messages=messages,
+        )
+
+    # ------------------------------------------------------------------ 会话
+    def _prepare_session(self, state: DialogueState) -> None:
+        session = state.shared.current_session
+
+        if session is None:
+            state.shared.start_session()
+        elif (
+            time.time() - session.last_activity_at
+            > settings.session_timeout_seconds
+        ):
+            state.shared.close_current_session()
+            state.reset_runtime_state_for_new_session()
+            state.shared.start_session()
+
+    # ------------------------------------------------------------------ 文本
+    async def _handle_text_message(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+    ) -> list[BotMessage]:
+        turn_plan = await self.turn_planner.predict(
+            state,
+            user_message,
+            self.task_handler.flows,
+            self.knowledge_handler.knowledge_intents,
+        )
+        validation = self.turn_plan_validator.validate(
+            turn_plan,
+            state=state,
+            flows=self.task_handler.flows,
+            knowledge_intents=self.knowledge_handler.knowledge_intents,
+        )
+
+        if not validation.valid:
+            assert validation.reason is not None
+            return await self.clarify_responder.respond(
+                state=state,
+                user_message=user_message,
+                reason=validation.reason,
+            )
+
+        if turn_plan.task is not None:
+            return await self.task_handler.handle(
+                commands=turn_plan.task.commands,
+                state=state,
+                user_message=user_message,
+            )
+
+        if turn_plan.knowledge is not None:
+            if state.tasks.active:
+                state.tasks.suspend_active()
+            return await self.knowledge_handler.handle(
+                state=state,
+                user_message=user_message,
+                intents=turn_plan.knowledge.intents,
+            )
+
+        if state.tasks.active:
+            state.tasks.suspend_active()
+        return await self.chitchat_handler.handle(
+            state=state,
+            user_message=user_message,
+        )
+
+    # ------------------------------------------------------------------ 对象
+    async def _handle_object_message(
+        self,
+        message: UserMessage,
+        state: DialogueState,
+    ) -> list[BotMessage]:
+        command = self._object_slot_command(
+            message=message,
+            state=state,
+            flows=self.task_handler.flows,
+        )
+
+        if command is None:
+            return await self.clarify_responder.respond(
+                state=state,
+                user_message=message,
+                reason=ClarifyReason.OBJECT_REQUIRES_INTENT,
+            )
+
+        return await self.task_handler.handle(
+            commands=[command],
+            state=state,
+            user_message=message,
+        )
+
+    def _object_slot_command(
+        self,
+        message: UserMessage,
+        state: DialogueState,
+        flows: FlowCatalog,
+    ) -> Command | None:
+        message_object = message.object
+        if message_object is None:
+            return None
+
+        object_type = message_object.type.strip().lower()
+        collect_slot_name = self._current_collect_slot_name(
+            state=state,
+            flows=flows,
+        )
+
+        if (
+            object_type == "order"
+            and collect_slot_name == "order_number"
+        ):
+            return SetSlotsCommand(
+                command="set_slots",
+                slots={"order_number": message_object.id},
+            )
+
+        if (
+            object_type == "product"
+            and collect_slot_name == "product_id"
+        ):
+            return SetSlotsCommand(
+                command="set_slots",
+                slots={"product_id": message_object.id},
+            )
+
+        return None
+
+    @staticmethod
+    def _current_collect_slot_name(
+        state: DialogueState,
+        flows: FlowCatalog,
+    ) -> str | None:
+        active_task = state.tasks.active
+        if active_task is None or active_task.step_id is None:
+            return None
+
+        current_flow = flows.get_flow(active_task.flow_id)
+        current_step = current_flow.get_step(active_task.step_id)
+        if not isinstance(current_step, CollectSlotStep):
+            return None
+
+        return current_step.slot_name
