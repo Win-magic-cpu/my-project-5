@@ -243,3 +243,24 @@ def test_object_message_persists_focused_object(client):
     messages = history.json()["messages"]
     assert messages[0]["role"] == "user"
     assert messages[0]["object"]["id"] == "A20240315001"
+
+
+def test_duplicate_message_id_is_idempotent(client):
+    payload = {
+        "sender_id": "u9",
+        "text": "帮我查订单状态",
+        "message_id": "dup-001",
+    }
+
+    first = client.post("/api/chat", json=payload)
+    second = client.post("/api/chat", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["messages"] == second.json()["messages"]
+
+    history = client.get(
+        "/api/chat/history", params={"sender_id": "u9"}
+    ).json()
+    # 只记录一轮：1 条用户消息 + 2 条机器人回复
+    assert len(history["messages"]) == 3

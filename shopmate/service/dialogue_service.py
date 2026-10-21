@@ -4,6 +4,7 @@ from shopmate.engine.dialogue_engine import DialogueEngine
 from shopmate.repository.dialogue_state_repository import (
     DialogueStateRepository,
 )
+from shopmate.service.locks import SenderLockRegistry
 
 
 class DialogueService:
@@ -13,25 +14,30 @@ class DialogueService:
         self,
         dialogue_state_repository: DialogueStateRepository,
         dialogue_engine: DialogueEngine,
+        sender_locks: SenderLockRegistry | None = None,
     ) -> None:
         self.dialogue_state_repository = dialogue_state_repository
         self.dialogue_engine = dialogue_engine
+        self.sender_locks = sender_locks or SenderLockRegistry()
 
     async def process_message(
         self,
         user_message: UserMessage,
     ) -> ProcessResult:
-        state = await self.dialogue_state_repository.load_state(
-            user_message.sender_id
-        )
+        # 同一用户串行：锁必须覆盖 load -> process -> save 整个过程，
+        # 只锁其中一步等于没锁。
+        async with self.sender_locks.get(user_message.sender_id):
+            state = await self.dialogue_state_repository.load_state(
+                user_message.sender_id
+            )
 
-        process_result = await self.dialogue_engine.process_message(
-            state,
-            user_message,
-        )
+            process_result = await self.dialogue_engine.process_message(
+                state,
+                user_message,
+            )
 
-        await self.dialogue_state_repository.save_state(state)
-        return process_result
+            await self.dialogue_state_repository.save_state(state)
+            return process_result
 
     async def get_state(self, sender_id: str) -> DialogueState:
         """只读取状态，供历史记录接口使用。"""

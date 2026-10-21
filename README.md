@@ -212,7 +212,7 @@ uv run python tools/smoke_check.py
 | `sender_id` | string | 是 | 用户唯一标识 |
 | `text` | string \| null | 否 | 文本消息，`text` 与 `object` 必须且只能传一个 |
 | `object` | object \| null | 否 | 结构化对象消息 |
-| `message_id` | string \| null | 否 | 不传时服务端生成 |
+| `message_id` | string \| null | 否 | 不传时服务端生成；同一 ID 重复提交返回相同结果（幂等） |
 
 响应：
 
@@ -343,6 +343,8 @@ uv run pytest -q
 - TurnPlanValidator 的各条拒绝规则
 - DialogueState 的 JSON 往返与 Upsert（SQLite）
 - DialogueEngine 的文本→对象消息链路与会话超时重置
+- 消息幂等（重复 `message_id` 回放）与同用户并发串行化
+- HTTP 层：请求校验、历史展开、对象消息持久化
 
 ## 模块职责
 
@@ -368,8 +370,7 @@ uv run pytest -q
 | 阶段 | 内容 |
 | --- | --- |
 | Day 1 | 欢迎引导/转人工 Flow、条件分支、规划提示词重写、Slot 白名单 |
-| Day 2–4 | 消息幂等与串行化、统一错误模型、Alembic 迁移与乐观锁 |
-| Day 5–7 | 真实 RAG（切分/向量/引用）、golden set 评估、可观测性 |
+| Day 2–4 | 消息幂等与串行化、统一错误模型、Alembic 迁移与乐观锁 || Day 5–7 | 真实 RAG（切分/向量/引用）、golden set 评估、可观测性 |
 | Day 8–10 | SSE 流式 + 前端 Demo、Docker/压测、面试版 README 与 ADR |
 
 详见 [docs/10-DAY-PLAN.md](docs/10-DAY-PLAN.md)。

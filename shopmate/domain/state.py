@@ -106,6 +106,8 @@ class DialogueState:
     sender_id: str
     shared: SharedState = field(default_factory=SharedState)
     tasks: TaskState = field(default_factory=TaskState)
+    # 最近处理过的消息 ID，用于识别客户端重试（幂等窗口）
+    recent_message_ids: list[str] = field(default_factory=list)
 
     def reset_runtime_state_for_new_session(self) -> None:
         """会话超时后清理只对旧会话有效的运行状态。"""

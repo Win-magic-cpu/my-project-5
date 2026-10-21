@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、38 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、44 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -17,7 +17,7 @@
 | Day | 主题 | 关键产出 | 面试关键词 |
 | --- | --- | --- | --- |
 | D1 ✅ | 意图路由 | 2 条新 Flow、规划提示词重写、Slot 白名单、SQLite 目录自愈 | Prompt 工程、注入防护 |
-| D2 | 会话一致性 | 消息幂等、同用户串行化 | 重试、竞态、分布式锁 |
+| D2 ✅ | 会话一致性 | 消息幂等、同用户串行化 | 重试、竞态、分布式锁 |
 | D3 | 接口契约 | 统一错误码、trace_id、分页、健康检查 | API 设计、可运维性 |
 | D4 | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
 | D5 | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
@@ -49,7 +49,7 @@
 **验收**
 
 ```powershell
-uv run pytest -q                     # 38 passed
+uv run pytest -q                     # 44 passed
 uv run python tools/smoke_check.py   # 8 个场景全部 200
 ```
 
@@ -59,42 +59,46 @@ uv run python tools/smoke_check.py   # 8 个场景全部 200
 
 ---
 
-## Day 2 会话一致性：幂等 + 串行化
+## Day 2 ✅ 会话一致性：幂等 + 串行化
 
-**问题**：LLM 调用 3~8 秒，客户端超时重试很常见；同一用户并发两条消息会把状态写乱。
+**问题**：LLM 调用 3~8 秒，客户端超时重试很常见；同一用户并发两条消息会各自读到同一份状态快照，后写覆盖先写。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `shopmate/domain/state.py` | `DialogueState` 增加 `recent_message_ids`（最多 50 个） |
-| `shopmate/engine/dialogue_engine.py` | 入口查重，命中直接返回上一轮回复 |
-| `shopmate/service/locks.py` | 新增 `SenderLockRegistry` |
-| `shopmate/service/dialogue_service.py` | `process_message` 包在 sender 锁里 |
-| `tests/test_idempotency.py` | 新增 |
+| `shopmate/domain/state.py` | `DialogueState` 增加 `recent_message_ids`（窗口 50） |
+| `shopmate/engine/dialogue_engine.py` | 入口查重；命中则回放该轮已提交的回复，不重复执行 |
+| `shopmate/service/locks.py` | 新增 `SenderLockRegistry`（按 sender 粒度） |
+| `shopmate/service/dialogue_service.py` | 锁覆盖 `load → process → save` 全过程 |
+| `tests/test_idempotency.py`、`tests/test_concurrency.py`、`tests/test_api.py` | 新增 6 个用例 |
 
 **关键代码**
 
 ```python
-if user_message.message_id in state.recent_message_ids:
-    last_turn = state.shared.current_session.turns[-1]
-    return ProcessResult(
-        sender_id=user_message.sender_id,
-        message_id=user_message.message_id,
-        messages=last_turn.bot_messages,
-    )
+# 重试回放：从已提交的 Turn 里找回原结果，而不是重新跑一遍
+duplicated_turn = self._find_duplicated_turn(state, user_message.message_id)
+if duplicated_turn is not None:
+    return ProcessResult(..., messages=list(duplicated_turn.bot_messages))
 ```
 
 ```python
-class SenderLockRegistry:
-    def __init__(self) -> None:
-        self._locks: dict[str, asyncio.Lock] = {}
-
-    def get(self, sender_id: str) -> asyncio.Lock:
-        return self._locks.setdefault(sender_id, asyncio.Lock())
+# 锁必须包住整个读改写，只锁其中一步等于没锁
+async with self.sender_locks.get(user_message.sender_id):
+    state = await repository.load_state(sender_id)
+    result = await engine.process_message(state, user_message)
+    await repository.save_state(state)
 ```
 
-**验收**：同一 `message_id` 连发 3 次只产生 1 个 Turn；10 并发同 sender 状态不串。
+**验收**：同一 `message_id` 连发两次只产生 1 个 Turn，且两次响应一致；10 并发同 sender 不丢更新。
+
+实测对照（`data/check_lock.py`）：
+
+```text
+有锁: 10 条；无锁: 1 条
+```
+
+**为什么不用全局锁**：锁粒度是 `sender_id`，不同用户互不影响；多实例部署时换成 Redis 分布式锁，接口不变。
 
 **提交**：`feat(consistency): 消息幂等与同用户请求串行化` / tag `day-02`
 

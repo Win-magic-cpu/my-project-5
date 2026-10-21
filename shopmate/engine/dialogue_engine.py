@@ -44,6 +44,17 @@ class DialogueEngine:
         state: DialogueState,
         user_message: UserMessage,
     ) -> ProcessResult:
+        # 客户端超时重试：同一个 message_id 不再重复执行，直接回放上一轮结果
+        duplicated_turn = self._find_duplicated_turn(
+            state, user_message.message_id
+        )
+        if duplicated_turn is not None:
+            return ProcessResult(
+                sender_id=user_message.sender_id,
+                message_id=user_message.message_id,
+                messages=list(duplicated_turn.bot_messages),
+            )
+
         self._prepare_session(state)
         turn = Turn.create(user_message)
 
@@ -72,12 +83,42 @@ class DialogueEngine:
 
         turn.bot_messages.extend(messages)
         state.shared.append_turn(turn)
+        self._remember_message_id(state, user_message.message_id)
 
         return ProcessResult(
             sender_id=user_message.sender_id,
             message_id=user_message.message_id,
             messages=messages,
         )
+
+    # ------------------------------------------------------------ 幂等辅助
+    IDEMPOTENCY_WINDOW = 50
+
+    @classmethod
+    def _find_duplicated_turn(
+        cls,
+        state: DialogueState,
+        message_id: str,
+    ) -> "Turn | None":
+        """在已提交的轮次里找回同一个 message_id 的处理结果。"""
+        if message_id not in state.recent_message_ids:
+            return None
+
+        for session in reversed(state.shared.sessions):
+            for turn in reversed(session.turns):
+                if turn.user_message.message_id == message_id:
+                    return turn
+        return None
+
+    @classmethod
+    def _remember_message_id(
+        cls,
+        state: DialogueState,
+        message_id: str,
+    ) -> None:
+        state.recent_message_ids.append(message_id)
+        # 只保留最近 N 条，避免状态无限增长
+        del state.recent_message_ids[: -cls.IDEMPOTENCY_WINDOW]
 
     # ------------------------------------------------------------------ 会话
     def _prepare_session(self, state: DialogueState) -> None:
