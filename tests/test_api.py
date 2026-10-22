@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from shopmate.api.dependencies import get_db, get_engine
+from shopmate.api.errors import register_exception_handlers
+from shopmate.api.middleware import register_trace_middleware
 from shopmate.api.routers.chat_router import chat_router
+from shopmate.api.routers.health_router import health_router
 from shopmate.domain.messages import BotMessage
 from shopmate.engine.dialogue_engine import DialogueEngine
 from shopmate.knowledge.intents import KNOWLEDGE_INTENTS
@@ -136,7 +139,10 @@ def client(flows):
     dialogue_engine = build_engine(flows)
 
     app = FastAPI()
+    register_exception_handlers(app)
+    register_trace_middleware(app)
     app.include_router(chat_router)
+    app.include_router(health_router)
 
     async def override_engine():
         return dialogue_engine
@@ -264,3 +270,68 @@ def test_duplicate_message_id_is_idempotent(client):
     ).json()
     # 只记录一轮：1 条用户消息 + 2 条机器人回复
     assert len(history["messages"]) == 3
+
+
+def test_history_pagination(client):
+    for index in range(3):
+        response = client.post(
+            "/api/chat",
+            json={
+                "sender_id": "p1",
+                "text": "你好",
+                "message_id": f"p{index}",
+            },
+        )
+        assert response.status_code == 200
+
+    first_page = client.get(
+        "/api/chat/history",
+        params={"sender_id": "p1", "limit": 2, "offset": 0},
+    ).json()
+    assert first_page["total"] == 6
+    assert len(first_page["messages"]) == 2
+    assert first_page["has_more"] is True
+    assert first_page["limit"] == 2
+    assert first_page["offset"] == 0
+
+    last_page = client.get(
+        "/api/chat/history",
+        params={"sender_id": "p1", "limit": 2, "offset": 4},
+    ).json()
+    assert len(last_page["messages"]) == 2
+    assert last_page["has_more"] is False
+
+    beyond = client.get(
+        "/api/chat/history",
+        params={"sender_id": "p1", "limit": 2, "offset": 99},
+    ).json()
+    assert beyond["messages"] == []
+    assert beyond["has_more"] is False
+
+
+def test_history_rejects_invalid_pagination(client):
+    response = client.get(
+        "/api/chat/history",
+        params={"sender_id": "p1", "limit": 0},
+    )
+    assert response.status_code == 422
+
+    body = response.json()
+    assert body["code"] == "validation_error"
+    assert body["message"]
+    assert body["trace_id"] == response.headers["X-Trace-Id"]
+
+
+def test_health_endpoints(client):
+    assert client.get("/healthz").json() == {"status": "ok"}
+    assert client.get("/healthz").status_code == 200
+
+
+def test_validation_error_uses_unified_envelope(client):
+    response = client.post("/api/chat", json={"sender_id": "u1"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "validation_error"
+    assert body["message"]
+    assert body["trace_id"] == response.headers["X-Trace-Id"]

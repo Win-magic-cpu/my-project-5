@@ -231,6 +231,45 @@ uv run python tools/smoke_check.py
 
 按 Session、Turn 的保存顺序展开为一维消息列表，`role` 为 `user` / `bot`。
 
+查询参数：
+
+| 参数 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `sender_id` | string | 必填 | 用户唯一标识 |
+| `limit` | int | 50 | 每页条数，范围 1~200 |
+| `offset` | int | 0 | 跳过条数 |
+
+响应在 `messages` 之外还返回 `total`、`limit`、`offset`、`has_more`，前端据此做"加载更多"。
+
+### 错误模型
+
+所有错误统一为一种结构，HTTP 状态码保留语义，`code` 供前端分支：
+
+```json
+{
+  "code": "validation_error",
+  "message": "text 和 object 必须且只能传一个",
+  "trace_id": "9f2c1ab34de5f607",
+  "details": [{ "field": "body", "message": "text 和 object 必须且只能传一个" }]
+}
+```
+
+| `code` | 状态码 | 场景 |
+| --- | --- | --- |
+| `validation_error` | 422 | 请求体不合法 |
+| `http_404` | 404 | 路由不存在 |
+| `not_ready` | 503 | 引擎或数据库未就绪 |
+| `internal_error` | 500 | 未捕获异常（不返回堆栈） |
+
+每个响应都带 `X-Trace-Id` 头；500 的堆栈只写日志，不回传调用方。
+
+### 健康检查
+
+| 路径 | 作用 |
+| --- | --- |
+| `GET /healthz` | 存活探针，进程在跑即 200 |
+| `GET /readyz` | 就绪探针，检查引擎已构建、数据库可读 |
+
 ## Flow 配置
 
 任务流程写在 `shopmate/flow_config/user_flows.yml`，由 `slots` 与 `flows` 两部分组成。
@@ -344,7 +383,7 @@ uv run pytest -q
 - DialogueState 的 JSON 往返与 Upsert（SQLite）
 - DialogueEngine 的文本→对象消息链路与会话超时重置
 - 消息幂等（重复 `message_id` 回放）与同用户并发串行化
-- HTTP 层：请求校验、历史展开、对象消息持久化
+- HTTP 层：请求校验、历史分页、错误结构、trace_id、健康检查
 
 ## 模块职责
 

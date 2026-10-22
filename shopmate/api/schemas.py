@@ -50,3 +50,7 @@ class HistoryMessage(BaseModel):
 class HistoryResponse(BaseModel):
     sender_id: str
     messages: list[HistoryMessage]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

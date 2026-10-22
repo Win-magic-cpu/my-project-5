@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、44 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、53 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -18,7 +18,7 @@
 | --- | --- | --- | --- |
 | D1 ✅ | 意图路由 | 2 条新 Flow、规划提示词重写、Slot 白名单、SQLite 目录自愈 | Prompt 工程、注入防护 |
 | D2 ✅ | 会话一致性 | 消息幂等、同用户串行化 | 重试、竞态、分布式锁 |
-| D3 | 接口契约 | 统一错误码、trace_id、分页、健康检查 | API 设计、可运维性 |
+| D3 ✅ | 接口契约 | 统一错误码、trace_id、分页、健康检查 | API 设计、可运维性 |
 | D4 | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
 | D5 | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
 | D6 | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
@@ -104,24 +104,47 @@ async with self.sender_locks.get(user_message.sender_id):
 
 ---
 
-## Day 3 接口契约与可运维性
+## Day 3 ✅ 接口契约与可运维性
+
+**问题**：错误返回有 FastAPI 默认格式、有裸 500，前端要写两套解析；日志里无法把一次请求的多个阶段串起来；历史记录一次全量返回，长会话直接卡死。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `shopmate/api/errors.py` | `ApiError` + 全局异常处理器，统一 `{code, message, trace_id}` |
-| `shopmate/api/middleware.py` | trace_id 中间件（`contextvars`） |
-| `shopmate/api/schemas.py` | 历史查询增加 `limit/offset`；字段补 `examples` |
-| `shopmate/api/routers/chat_router.py` | 分页、`/healthz`、`/readyz` |
+| `shopmate/api/errors.py` | `ApiError` + 4 个异常处理器，统一 `{code, message, trace_id}` |
+| `shopmate/api/trace.py` | `contextvars` 保存 trace_id |
+| `shopmate/api/middleware.py` | 生成/透传 `X-Trace-Id`，兜住未处理异常返回 500 |
+| `shopmate/api/routers/health_router.py` | `/healthz`（存活）、`/readyz`（引擎 + 数据库就绪） |
+| `shopmate/api/routers/chat_router.py` | 历史分页 `limit/offset`，返回 `total/has_more` |
+| `tests/test_api_errors.py`、`tests/test_api.py` | 新增 9 个用例 |
+
+**错误结构**
+
+```json
+{
+  "code": "validation_error",
+  "message": "text 和 object 必须且只能传一个",
+  "trace_id": "9f2c1ab34de5f607",
+  "details": [{"field": "body", "message": "..."}]
+}
+```
+
+`code` 是稳定枚举（`validation_error` / `http_404` / `not_ready` / `internal_error` / 业务自定义），前端可直接 switch；`message` 只给人看。
 
 **验收**
 
 ```powershell
-curl.exe "http://127.0.0.1:18082/api/chat/history?sender_id=u1&limit=1"
-# {"sender_id":..., "messages":[...], "total": N, "has_more": true}
-curl.exe http://127.0.0.1:18082/healthz
+curl.exe -i "http://127.0.0.1:18082/api/chat/history?sender_id=u1&limit=2"
+# 响应头 X-Trace-Id，body 含 total / limit / offset / has_more
+curl.exe -i -X POST http://127.0.0.1:18082/api/chat -H "Content-Type: application/json" -d '{\"sender_id\":\"u1\"}'
+# 422 + 统一结构
+curl.exe http://127.0.0.1:18082/readyz
 ```
+
+实测：`53 passed`。
+
+**取舍**：trace_id 用 `contextvars` 而不是往每个函数传参，避免污染业务签名；500 的 `message` 固定为中文兜底文案，堆栈只进日志——**不把内部信息透给调用方**。
 
 **提交**：`feat(api): 统一错误模型、trace_id 与历史分页` / tag `day-03`
 

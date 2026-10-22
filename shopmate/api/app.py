@@ -3,7 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from shopmate.api.dependencies import init_dialogue_engine
+from shopmate.api.errors import register_exception_handlers
+from shopmate.api.middleware import register_trace_middleware
 from shopmate.api.routers.chat_router import chat_router
+from shopmate.api.routers.health_router import health_router
 from shopmate.clients.database import (
     close_db_engine,
     create_all_tables,
@@ -37,4 +40,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+register_exception_handlers(app)
+register_trace_middleware(app)
+
 app.include_router(chat_router)
+app.include_router(health_router)

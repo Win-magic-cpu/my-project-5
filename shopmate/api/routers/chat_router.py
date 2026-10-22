@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from shopmate.api.dependencies import get_dialogue_service
 from shopmate.api.schemas import (
@@ -17,6 +17,7 @@ from shopmate.domain.messages import (
     ProcessResult,
     UserMessage,
 )
+from shopmate.domain.state import DialogueState
 from shopmate.service.dialogue_service import DialogueService
 
 chat_router = APIRouter(tags=["chat"])
@@ -35,9 +36,27 @@ async def chat(
 @chat_router.get("/api/chat/history")
 async def history(
     sender_id: str,
+    limit: int = Query(50, ge=1, le=200, description="每页条数"),
+    offset: int = Query(0, ge=0, description="跳过的条数"),
     dialogue_service: DialogueService = Depends(get_dialogue_service),
 ) -> HistoryResponse:
     state = await dialogue_service.get_state(sender_id)
+    messages = _expand_history(state)
+    total = len(messages)
+    page = messages[offset : offset + limit]
+
+    return HistoryResponse(
+        sender_id=sender_id,
+        messages=page,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(page) < total,
+    )
+
+
+def _expand_history(state: DialogueState) -> list[HistoryMessage]:
+    """把 Sessions/Turns 展开成一维消息列表，顺序即前端展示顺序。"""
     messages: list[HistoryMessage] = []
 
     for session in state.shared.sessions:
@@ -60,7 +79,7 @@ async def history(
                 ]
             )
 
-    return HistoryResponse(sender_id=sender_id, messages=messages)
+    return messages
 
 
 def _build_user_message(chat_request: ChatRequest) -> UserMessage:
