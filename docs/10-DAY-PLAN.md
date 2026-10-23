@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、53 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、58 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -19,7 +19,7 @@
 | D1 ✅ | 意图路由 | 2 条新 Flow、规划提示词重写、Slot 白名单、SQLite 目录自愈 | Prompt 工程、注入防护 |
 | D2 ✅ | 会话一致性 | 消息幂等、同用户串行化 | 重试、竞态、分布式锁 |
 | D3 ✅ | 接口契约 | 统一错误码、trace_id、分页、健康检查 | API 设计、可运维性 |
-| D4 | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
+| D4 ✅ | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
 | D5 | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
 | D6 | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
 | D7 | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
@@ -150,24 +150,37 @@ curl.exe http://127.0.0.1:18082/readyz
 
 ---
 
-## Day 4 数据层：迁移与乐观锁
+## Day 4 ✅ 数据层：迁移与乐观锁
+
+**问题**：表结构靠 `create_all`，改字段只能删库重建；两个实例同时处理同一用户时，后写的会覆盖先写的（lost update）。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `alembic.ini`、`migrations/` | `uv add --dev alembic` 后初始化 |
-| `migrations/versions/0001_init.py` | 建表 + `version`、`updated_at` |
-| `shopmate/models/dialogue_state.py` | 增加版本列 |
-| `shopmate/repository/dialogue_state_repository.py` | 条件更新，`rowcount == 0` 抛 `StateConflictError` |
-| `shopmate/service/dialogue_service.py` | 冲突重试 3 次（指数退避） |
-| `docker-compose.yml` | MySQL 服务 |
+| `alembic.ini`、`migrations/` | 引入 Alembic；`env.py` 从应用配置注入 URL，支持异步引擎 |
+| `migrations/versions/0001_initial.py` | 建表：`sender_id` + `state_json` |
+| `migrations/versions/0002_state_version.py` | 增加 `version`、`updated_at`（带 server_default，可在线升级） |
+| `shopmate/models/dialogue_state.py` | ORM 同步新增两列 |
+| `shopmate/repository/dialogue_state_repository.py` | 读时记版本，写时 `WHERE version = ?`；影响 0 行抛 `StateConflictError` |
+| `shopmate/service/dialogue_service.py` | 冲突重试 3 次，指数退避（50/100/200ms） |
+| `docker-compose.yml` | 本地 MySQL 8.4（utf8mb4 + healthcheck） |
+| `tests/test_state_conflict.py` | 新增 5 个用例 |
 
-**验收**：两个协程同时保存同一状态，一个成功、一个冲突后重试成功。
+**为什么不用行锁**：状态是整块 JSON，行锁会把 LLM 的 5 秒等待也锁进事务；乐观锁只在 `UPDATE` 那一瞬间校验版本，冲突概率低、代价小。
+
+**验收**
+
+```powershell
+uv run alembic upgrade head
+uv run alembic current      # 0002_state_version (head)
+uv run alembic check        # No new upgrade operations detected.
+uv run pytest -q            # 58 passed
+```
+
+**取舍**：重试会重新读状态、重新跑一遍引擎（可能再调一次 LLM）。这是"正确性优先"的选择——丢更新比多花一次 token 更贵；配合 Day 2 的幂等窗口，重复执行不会产生两条记录。
 
 **提交**：`feat(db): Alembic 迁移与状态乐观锁` / tag `day-04`
-
-**为什么不用行锁**：状态是整块 JSON，行锁会把 LLM 的 5 秒等待也锁进去；乐观锁只在写入瞬间校验版本。
 
 ---
 

@@ -7,6 +7,7 @@
 - **结构化输出 + 校验白名单 + 澄清兜底**：LLM 只负责"理解"，能不能执行由确定性代码判断。
 - **LLM 路由 + YAML 流程编排**：任务型对话不是硬编码 if-else，而是一份可配置、可热改的 Flow。
 - **会话状态 + 任务栈管理**：多轮对话、任务切换、任务恢复都有明确的状态模型，并持久化到数据库。
+- **并发安全**：消息幂等、按用户串行、状态乐观锁，重试与并发都不会重复执行或丢更新。
 
 ## 能力一览
 
@@ -103,6 +104,9 @@ ecommerce-customer-service/
 │  ├─ prompts/              # 提示词加载器、历史构造、jinja2 模板
 │  └─ flow_config/          # user_flows.yml：任务流程配置
 ├─ tools/mock_commerce/     # 模拟电商后端（订单/物流/商品）
+├─ migrations/              # Alembic 迁移脚本
+├─ alembic.ini              # 迁移配置（URL 由 env.py 注入）
+├─ docker-compose.yml       # 本地 MySQL
 ├─ tests/                   # 单元测试（Flow、校验器、状态持久化、Engine）
 ├─ docs/ARCHITECTURE.md      # 架构说明与关键取舍
 ├─ docs/10-DAY-PLAN.md       # 10 天迭代计划
@@ -136,16 +140,25 @@ uv run python tools/mock_commerce/main.py
 ### 3. 初始化数据库
 
 ```bash
-mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS customer_service DEFAULT CHARSET utf8mb4;"
+# 方式一：本地 MySQL（推荐有 Docker 时）
+docker compose up -d mysql
+mysql -h127.0.0.1 -uroot -p123456 -e "CREATE DATABASE IF NOT EXISTS customer_service DEFAULT CHARSET utf8mb4;"
+
+# 方式二：SQLite 零依赖
+# 把 .env 里的 DATABASE_URL 换成：
+# DATABASE_URL=sqlite+aiosqlite:///./data/customer_service.db
 ```
 
-服务启动时会自动建表（`AUTO_CREATE_TABLES=true`）。
+表结构用 Alembic 管理：
 
-如果暂时没有 MySQL，把 `.env` 里的 `DATABASE_URL` 换成：
-
-```dotenv
-DATABASE_URL=sqlite+aiosqlite:///./data/customer_service.db
+```bash
+uv run alembic upgrade head    # 应用到最新
+uv run alembic downgrade -1    # 回滚一步
+uv run alembic current         # 查看当前版本
+uv run alembic check           # 校验模型与迁移是否一致
 ```
+
+本地开发可以保留 `AUTO_CREATE_TABLES=true` 让服务启动时自动建表；生产环境建议设为 `false`，只走迁移，避免"代码建表"和"迁移"两套 schema 来源。
 
 ### 4. 启动客服后端
 
