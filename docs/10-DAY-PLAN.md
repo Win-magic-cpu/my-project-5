@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、58 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、66 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -20,7 +20,7 @@
 | D2 ✅ | 会话一致性 | 消息幂等、同用户串行化 | 重试、竞态、分布式锁 |
 | D3 ✅ | 接口契约 | 统一错误码、trace_id、分页、健康检查 | API 设计、可运维性 |
 | D4 ✅ | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
-| D5 | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
+| D5 ✅ | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
 | D6 | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
 | D7 | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
 | D8 | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
@@ -184,25 +184,53 @@ uv run pytest -q            # 58 passed
 
 ---
 
-## Day 5 真实 RAG
+## Day 5 ✅ 真实 RAG
+
+**问题**：政策类问题原来靠关键词硬匹配，换个说法就召回不到；回答也没有出处，无法判断是不是模型编的。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `shopmate/knowledge/rag/loader.py` | 读取 `docs/knowledge/*.md` |
-| `shopmate/knowledge/rag/splitter.py` | 500 字 / 50 重叠，按标题切 |
-| `shopmate/knowledge/rag/embedding.py` | DashScope `text-embedding-v3`，测试用 fake |
-| `shopmate/knowledge/rag/store.py` | Chroma 持久化集合 |
+| `docs/knowledge/*.md` | 五份政策文档：退款、退货、配送、平台规则、售后时效 |
+| `shopmate/knowledge/rag/splitter.py` | 按标题切段 + 240 字滑窗 / 40 重叠，chunk 带标题路径 |
+| `shopmate/knowledge/rag/embedding.py` | `EmbeddingModel` 协议：DashScope 正式实现 + 本地 hashing 离线实现 |
+| `shopmate/knowledge/rag/store.py` | 纯 Python 余弦索引，可序列化；模型不匹配自动重建 |
+| `shopmate/knowledge/rag/loader.py` / `factory.py` | 文档加载、embedding 选择、索引路径解析 |
 | `shopmate/knowledge/providers.py` | `RAGProvider` 接向量检索；`KnowledgeChunk` 增加 `source`、`score` |
-| `shopmate/prompts/jinja2/knowledge_respond.jinja2` | 要求输出 `[1][2]` 引用 |
+| `shopmate/knowledge/responder.py` | 资料编号 + 来源标注，喂给模型 |
+| `shopmate/prompts/jinja2/knowledge_respond.jinja2` | 要求句末标注 `[1]`，禁止编造编号 |
 | `scripts/ingest.py` | 一键重建索引 |
+| `tests/test_rag.py` | 新增 8 个用例 |
 
-**验收**：问"退款多久到账"，回复带 `[1]`，`source` 指向正确文档。
+**没有引入 Chroma / numpy**：20 个 chunk 的规模，纯 Python 点积足够；接口（build/search）不变，上量再换 pgvector。
+
+**调参过程（面试可以讲）**
+
+```text
+chunk 500 / dim 256 / 阈值 0.12：
+  退款多久能到账      -> refund 0.377 ✅
+  多久发货，包邮吗    -> 未检索到    ❌（长 chunk 稀释）
+  你们今天天气怎么样  -> platform 0.146 ❌（假阳性）
+
+chunk 240 / dim 512 / 阈值 0.15：
+  退款多久能到账      -> refund 0.335 ✅
+  支持七天无理由退货吗 -> return 0.492 ✅
+  多久发货，包邮吗    -> shipping 0.197 ✅
+  优惠券可以叠加吗    -> platform 0.353 ✅
+  你们今天天气怎么样  -> 未检索到    ✅（正确拒答）
+```
+
+**验收**
+
+```powershell
+uv run python scripts/ingest.py     # 20 个片段 -> data/rag_index.json
+uv run pytest -q                    # 66 passed
+```
+
+**取舍**：没做重排（rerank），chunk 参数是按当前语料手调的；这两点写进 README 的"下一步"，比假装已经做好更可信。
 
 **提交**：`feat(rag): 文档切分、向量检索与引用式回答` / tag `day-05`
-
-**取舍**：chunk 500/50 是起步值；召回后没做重排，是下一阶段的已知缺口。
 
 ---
 

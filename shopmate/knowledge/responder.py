@@ -23,7 +23,8 @@ class KnowledgeResponder:
         )
         history = HistoryBuilder.build(recent_turns)
         knowledge_content = "\n\n".join(
-            chunk.content for chunk in chunks
+            self._format_chunk(index, chunk)
+            for index, chunk in enumerate(chunks, start=1)
         )
 
         prompt = PromptTemplate.from_template(
@@ -41,3 +42,11 @@ class KnowledgeResponder:
         )
 
         return [BotMessage(text=response)]
+
+    @staticmethod
+    def _format_chunk(index: int, chunk: KnowledgeChunk) -> str:
+        """给每段资料编号并标注来源，方便模型生成 [1] 这样的引用。"""
+        header = f"[{index}]"
+        if chunk.source:
+            header += f" 来源：{chunk.source}"
+        return f"{header}\n{chunk.content}"

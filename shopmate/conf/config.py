@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # 启动时自动建表，方便本地一条命令跑起来
     auto_create_tables: bool = True
 
+    # 检索增强（RAG）
+    # auto: 配了 LLM_API_KEY 用 dashscope，否则用本地 hashing
+    embedding_provider: str = "auto"
+    embedding_model: str = "text-embedding-v3"
+    embedding_dim: int = 512
+    rag_top_k: int = 3
+    rag_min_score: float = 0.15
+    rag_index_path: str = "./data/rag_index.json"
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",

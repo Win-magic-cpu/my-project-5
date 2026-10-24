@@ -98,12 +98,15 @@ ecommerce-customer-service/
 │  │  ├─ action/            #   Action 基类、注册表、Runner、自动发现
 │  │  │  └─ custom/         #   业务 Action（新增 Action 只需放这里）
 │  │  └─ handler.py         #   TaskHandler 统一入口
-│  ├─ knowledge/            # 知识轨道：Provider、Intent、Registry、Responder、Handler
+│  ├─ knowledge/            # 知识轨道：Intent、Provider、RAG 检索、回复生成
+│  │  └─ rag/               #   文档切分、embedding、向量索引
 │  ├─ chitchat/             # 闲聊轨道
 │  ├─ clarify/              # 澄清轨道
 │  ├─ prompts/              # 提示词加载器、历史构造、jinja2 模板
 │  └─ flow_config/          # user_flows.yml：任务流程配置
 ├─ tools/mock_commerce/     # 模拟电商后端（订单/物流/商品）
+├─ docs/knowledge/          # 政策文档（RAG 语料）
+├─ scripts/ingest.py        # 重建 RAG 索引
 ├─ migrations/              # Alembic 迁移脚本
 ├─ alembic.ini              # 迁移配置（URL 由 env.py 注入）
 ├─ docker-compose.yml       # 本地 MySQL
@@ -351,6 +354,32 @@ next:
 
 条件表达式运行在受限环境（仅白名单内置函数），可用 `slots` 变量。
 
+## 检索增强（RAG）
+
+政策类问题不靠关键词硬匹配，而是走「切分 → 向量化 → 余弦召回 → 带引用生成」：
+
+```text
+docs/knowledge/*.md
+  └─ MarkdownSplitter       按标题切段 + 240 字滑窗（40 重叠），chunk 带标题路径
+       └─ EmbeddingModel    DashScope text-embedding-v3 / 本地 hashing（离线）
+            └─ VectorStore  内存余弦检索，可序列化到 data/rag_index.json
+                 └─ RAGProvider.retrieve() 返回内容 + source + score
+                      └─ KnowledgeResponder  拼成 [1] 来源：refund 的编号资料
+```
+
+重建索引：
+
+```bash
+uv run python scripts/ingest.py
+```
+
+关键取舍：
+
+- **chunk 240/40**：500 字时长文档会把相似度稀释，短 query 召不回来；调小后"多久发货包邮吗"从 0 分变成命中 shipping。
+- **相似度阈值 0.15**：宁缺毋滥，低于阈值直接走"未检索到"，避免把不相关文档塞给模型。
+- **可插拔 embedding**：没有 API Key 时用特征哈希向量，保证测试和离线演示可跑；生产配 Key 后自动切 DashScope，接口不变。
+- **来源编号**：每段资料带 `[1] 来源：refund`，提示词要求模型在句末标注引用编号，方便追溯答案出处。
+
 ## 扩展指南
 
 ### 新增一条任务流程
@@ -397,6 +426,8 @@ uv run pytest -q
 - DialogueEngine 的文本→对象消息链路与会话超时重置
 - 消息幂等（重复 `message_id` 回放）与同用户并发串行化
 - HTTP 层：请求校验、历史分页、错误结构、trace_id、健康检查
+- RAG：Markdown 切分、向量召回排序、来源与分数、阈值兜底
+- 数据库：Alembic 迁移、乐观锁冲突与重试
 
 ## 模块职责
 
@@ -422,7 +453,8 @@ uv run pytest -q
 | 阶段 | 内容 |
 | --- | --- |
 | Day 1 | 欢迎引导/转人工 Flow、条件分支、规划提示词重写、Slot 白名单 |
-| Day 2–4 | 消息幂等与串行化、统一错误模型、Alembic 迁移与乐观锁 || Day 5–7 | 真实 RAG（切分/向量/引用）、golden set 评估、可观测性 |
+| Day 2–4 | 消息幂等与串行化、统一错误模型、Alembic 迁移与乐观锁 |
+| Day 5–7 | 真实 RAG（切分/向量/引用）、golden set 评估、可观测性 |
 | Day 8–10 | SSE 流式 + 前端 Demo、Docker/压测、面试版 README 与 ADR |
 
 详见 [docs/10-DAY-PLAN.md](docs/10-DAY-PLAN.md)。
