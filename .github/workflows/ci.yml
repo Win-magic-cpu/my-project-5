@@ -21,3 +21,6 @@ jobs:
 
       - name: 运行测试
         run: uv run pytest -q
+
+      - name: 离线评估（阈值 0.90）
+        run: uv run python eval/run_eval.py --min-accuracy 0.90

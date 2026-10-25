@@ -36,4 +36,5 @@ packages = ["shopmate"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 norecursedirs = ["pytest-cache-files-*", ".*", "__pycache__"]

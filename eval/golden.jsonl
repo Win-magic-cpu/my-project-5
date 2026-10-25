@@ -1,0 +1,40 @@
+{"id": "t-order-01", "text": "帮我查一下订单状态", "expected": {"decision": "task", "flow": "order_status_query"}}
+{"id": "t-order-02", "text": "查下订单", "expected": {"decision": "task", "flow": "order_status_query"}}
+{"id": "t-order-03", "text": "我的货到哪了", "expected": {"decision": "task", "flow": "order_status_query"}}
+{"id": "t-logistics-01", "text": "查一下物流", "expected": {"decision": "task", "flow": "logistics_tracking"}}
+{"id": "t-logistics-02", "text": "我上次买的那件衣服什么时候能到", "expected": {"decision": "task", "flow": "logistics_tracking"}}
+{"id": "t-refund-01", "text": "我要退款", "expected": {"decision": "task", "flow": "refund_request"}}
+{"id": "t-refund-02", "text": "帮我申请退款", "expected": {"decision": "task", "flow": "refund_request"}}
+{"id": "t-human-01", "text": "帮我转人工", "expected": {"decision": "task", "flow": "human_handoff"}}
+{"id": "t-human-02", "text": "转接客服", "expected": {"decision": "task", "flow": "human_handoff"}}
+{"id": "t-recommend-01", "text": "推荐相似商品", "expected": {"decision": "task", "flow": "similar_product_recommendation"}}
+{"id": "t-slot-01", "text": "帮我查订单 A20240315001 的状态", "expected": {"decision": "task", "flow": "order_status_query", "slots": {"order_number": "A20240315001"}}}
+{"id": "t-slot-02", "text": "A20240315001", "active_task": {"flow_id": "order_status_query", "step_id": "ask_order_number"}, "expected": {"decision": "task", "flow": "order_status_query", "slots": {"order_number": "A20240315001"}}}
+{"id": "t-slot-03", "text": "A20240315002", "active_task": {"flow_id": "refund_request", "step_id": "ask_order_number"}, "expected": {"decision": "task", "flow": "refund_request", "slots": {"order_number": "A20240315002"}}}
+{"id": "t-slot-04", "text": "尺码不合适", "active_task": {"flow_id": "refund_request", "step_id": "ask_refund_reason"}, "expected": {"decision": "task", "flow": "refund_request", "slots": {"refund_reason": "尺码不合适"}}}
+{"id": "k-refund-01", "text": "退款政策是什么", "expected": {"decision": "knowledge", "intents": ["refund_policy"]}}
+{"id": "k-refund-02", "text": "钱什么时候能退回来", "expected": {"decision": "knowledge", "intents": ["refund_policy"]}}
+{"id": "k-refund-03", "text": "退款怎么处理", "expected": {"decision": "knowledge", "intents": ["refund_policy"]}}
+{"id": "k-return-01", "text": "支持退货吗", "expected": {"decision": "knowledge", "intents": ["return_policy"]}}
+{"id": "k-return-02", "text": "怎么换货", "expected": {"decision": "knowledge", "intents": ["return_policy"]}}
+{"id": "k-ship-01", "text": "多久发货", "expected": {"decision": "knowledge", "intents": ["shipping_policy"]}}
+{"id": "k-ship-02", "text": "包邮吗", "expected": {"decision": "knowledge", "intents": ["shipping_policy"]}}
+{"id": "k-ship-03", "text": "配送范围是哪些", "expected": {"decision": "knowledge", "intents": ["shipping_policy"]}}
+{"id": "k-platform-01", "text": "平台规则", "expected": {"decision": "knowledge", "intents": ["platform_rule"]}}
+{"id": "k-platform-02", "text": "账号会被限制吗", "expected": {"decision": "knowledge", "intents": ["platform_rule"]}}
+{"id": "k-general-01", "text": "优惠券怎么用", "expected": {"decision": "knowledge", "intents": ["general_ecommerce_info"]}}
+{"id": "k-general-02", "text": "可以开发票吗", "expected": {"decision": "knowledge", "intents": ["general_ecommerce_info"]}}
+{"id": "k-multi-01", "text": "退款和退货政策分别是什么", "expected": {"decision": "knowledge", "intents": ["refund_policy", "return_policy"]}}
+{"id": "k-product-01", "text": "这个商品什么材质", "focused_object": {"type": "product", "id": "P1001"}, "expected": {"decision": "knowledge", "intents": ["product_info"]}}
+{"id": "c-hello-01", "text": "你好", "expected": {"decision": "chitchat"}}
+{"id": "c-hello-02", "text": "在吗", "expected": {"decision": "chitchat"}}
+{"id": "c-thanks-01", "text": "谢谢", "expected": {"decision": "chitchat"}}
+{"id": "c-bye-01", "text": "再见", "expected": {"decision": "chitchat"}}
+{"id": "c-who-01", "text": "你叫什么", "expected": {"decision": "chitchat"}}
+{"id": "c-weather-01", "text": "今天天气不错", "expected": {"decision": "chitchat"}}
+{"id": "cl-empty-01", "text": "嗯", "expected": {"decision": "clarify", "reason": "missing_track"}}
+{"id": "cl-multi-01", "text": "帮我查订单，再说说退款政策", "expected": {"decision": "clarify", "reason": "multiple_tracks"}}
+{"id": "cl-product-01", "text": "这个商品什么材质", "expected": {"decision": "clarify", "reason": "missing_focused_object"}}
+{"id": "cl-product-02", "text": "这个商品多少钱", "expected": {"decision": "clarify", "reason": "missing_focused_object"}}
+{"id": "cl-unknown-01", "text": "帮我看看星座运势", "expected": {"decision": "clarify", "reason": "missing_track"}}
+{"id": "cl-nonsense-01", "text": "asdfgh", "expected": {"decision": "clarify", "reason": "missing_track"}}

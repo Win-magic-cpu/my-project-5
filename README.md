@@ -106,6 +106,7 @@ ecommerce-customer-service/
 │  └─ flow_config/          # user_flows.yml：任务流程配置
 ├─ tools/mock_commerce/     # 模拟电商后端（订单/物流/商品）
 ├─ docs/knowledge/          # 政策文档（RAG 语料）
+├─ eval/                    # 离线评估：golden set、指标、报告
 ├─ scripts/ingest.py        # 重建 RAG 索引
 ├─ migrations/              # Alembic 迁移脚本
 ├─ alembic.ini              # 迁移配置（URL 由 env.py 注入）
@@ -380,6 +381,25 @@ uv run python scripts/ingest.py
 - **可插拔 embedding**：没有 API Key 时用特征哈希向量，保证测试和离线演示可跑；生产配 Key 后自动切 DashScope，接口不变。
 - **来源编号**：每段资料带 `[1] 来源：refund`，提示词要求模型在句末标注引用编号，方便追溯答案出处。
 
+## 离线评估
+
+40 条 golden set 覆盖四条轨道，一条命令跑完并生成报告：
+
+```bash
+uv run python eval/run_eval.py --min-accuracy 0.90
+```
+
+| 指标 | 说明 |
+| --- | --- |
+| decision accuracy | 最终决策与期望一致的比例 |
+| false accepts | 应该澄清却被放行的数量（安全指标） |
+| clarify rate | 实际走澄清的比例 |
+| 分类准确率 | task / knowledge / chitchat / clarify 各自通过率 |
+
+规则 baseline 当前 95%（38/40），失败的两条都是同义改写（"钱什么时候能退回来"没出现"退款"）——这正说明规则能守住安全边界，但覆盖不了自然语言变体，需要 LLM 理解。
+
+预测器可插拔：CI 跑规则 baseline 保证流水线不回归；配了 Key 后加 `--planner llm`，同一套指标评真实模型。报告见 `docs/eval-report.md`。
+
 ## 扩展指南
 
 ### 新增一条任务流程
@@ -428,6 +448,7 @@ uv run pytest -q
 - HTTP 层：请求校验、历史分页、错误结构、trace_id、健康检查
 - RAG：Markdown 切分、向量召回排序、来源与分数、阈值兜底
 - 数据库：Alembic 迁移、乐观锁冲突与重试
+- 评估：40 条 golden set 的决策准确率、澄清率与错误接受数
 
 ## 模块职责
 

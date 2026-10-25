@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、66 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、72 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -21,7 +21,7 @@
 | D3 ✅ | 接口契约 | 统一错误码、trace_id、分页、健康检查 | API 设计、可运维性 |
 | D4 ✅ | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
 | D5 ✅ | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
-| D6 | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
+| D6 ✅ | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
 | D7 | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
 | D8 | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
 | D9 | 部署压测 | Docker、compose、Locust 报告 | 交付、瓶颈分析 |
@@ -234,23 +234,53 @@ uv run pytest -q                    # 66 passed
 
 ---
 
-## Day 6 评估体系
+## Day 6 ✅ 评估体系
+
+**问题**：改提示词、调路由规则时只能"感觉好像更好了"，没有回归基线；线上把该澄清的请求放行，也没人发现。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `eval/golden.jsonl` | 40 条：意图 20、槽位 10、政策 10 |
-| `eval/metrics.py` | 意图准确率、槽位匹配率、澄清率、路由准确率 |
-| `eval/run_eval.py` | 跑 Planner，生成 markdown 报告 |
-| `docs/eval-report.md` | 结果 |
-| `.github/workflows/ci.yml` | `--fail-under 0.90` |
+| `eval/golden.jsonl` | 40 条用例：task 14、knowledge 14、chitchat 6、clarify 6 |
+| `eval/cases.py` | 用例模型 + 加载校验（重复 id、未知决策直接报错） |
+| `eval/predictor.py` | 规则 baseline（关键词 + 上下文补槽），可在 CI 离线跑 |
+| `eval/metrics.py` | 决策准确率、分类准确率、澄清率、错误接受数、markdown 报告 |
+| `eval/run_eval.py` | 跑 plan→validate→decision，`--planner rule/llm`、`--min-accuracy` |
+| `docs/eval-report.md` | 每次运行自动生成的结果 |
+| `.github/workflows/ci.yml` | 增加 `--min-accuracy 0.90` 步骤 |
+| `tests/test_eval.py` | 6 个用例（用例集完整性、四轨道覆盖、阈值、指标、报告渲染） |
+
+**指标口径**
+
+| 指标 | 含义 |
+| --- | --- |
+| decision accuracy | 最终决策（task/knowledge/chitchat/clarify）与期望一致的比例 |
+| false accepts | 应该澄清却被放行的用例数（安全指标，必须为 0） |
+| clarify rate | 实际走澄清的比例 |
+
+**结果（规则 baseline）**
+
+```text
+cases=40 passed=38 accuracy=0.950 clarify_rate=0.200 false_accepts=0
+
+task      14 / 13 / 93%
+knowledge 14 / 13 / 93%
+chitchat   6 /  6 / 100%
+clarify    6 /  6 / 100%
+```
+
+两个失败用例都是同义改写："我上次买的那件衣服什么时候能到"（没有"物流/快递"）、
+"钱什么时候能退回来"（没有"退款"）。**这正好说明为什么需要 LLM 做意图理解**——规则能保证安全边界，但覆盖不了自然语言变体。
 
 **验收**
 
 ```powershell
-uv run python eval/run_eval.py --report docs/eval-report.md
+uv run python eval/run_eval.py --min-accuracy 0.90   # 退出码 0
+uv run pytest -q                                     # 72 passed
 ```
+
+**取舍**：评估器把"预测"抽象成可插拔，CI 跑规则 baseline 保证流水线不回归；有 Key 时 `--planner llm` 用同一套指标评真实模型，避免"两套口径没法比"。
 
 **提交**：`test(eval): 40 条 golden set 与离线评估脚本` / tag `day-06`
 
