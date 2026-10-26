@@ -7,6 +7,7 @@ from langchain_core.prompts import PromptTemplate
 from shopmate.clients.llm import get_llm
 from shopmate.domain.messages import BotMessage, UserMessage
 from shopmate.domain.state import DialogueState
+from shopmate.obs.trace import stage
 from shopmate.plan.models import ClarifyReason
 from shopmate.prompts.history_builder import HistoryBuilder
 from shopmate.prompts.prompt_loader import load_prompt
@@ -80,6 +81,15 @@ class ClarifyResponder:
         )
 
     async def respond(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+        reason: ClarifyReason,
+    ) -> list[BotMessage]:
+        with stage("clarify"):
+            return await self._respond(state, user_message, reason)
+
+    async def _respond(
         self,
         state: DialogueState,
         user_message: UserMessage,

@@ -113,6 +113,38 @@ def _reply_for(prompt: str) -> str:
     return "你好，我是 ShopMate 电商助手，可以查订单、查物流、咨询商品或申请退款。"
 
 
+@app.post("/v1/embeddings")
+async def embeddings(request: Request) -> dict:
+    """确定性哈希向量，保证离线演示不依赖真实 embedding 服务。"""
+    body = await request.json()
+    texts = body.get("input", [])
+    if isinstance(texts, str):
+        texts = [texts]
+
+    return {
+        "object": "list",
+        "model": body.get("model", "mock-embedding"),
+        "data": [
+            {
+                "object": "embedding",
+                "index": index,
+                "embedding": _hash_vector(text),
+            }
+            for index, text in enumerate(texts)
+        ],
+        "usage": {"prompt_tokens": 0, "total_tokens": 0},
+    }
+
+
+def _hash_vector(text: str, dim: int = 64) -> list[float]:
+    vector = [0.0] * dim
+    for token in str(text):
+        index = hash(token) % dim
+        vector[index] += 1.0
+    norm = sum(value * value for value in vector) ** 0.5
+    return [value / norm for value in vector] if norm else vector
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> dict:
     body = await request.json()

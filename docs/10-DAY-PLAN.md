@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、72 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、79 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -22,7 +22,7 @@
 | D4 ✅ | 数据层 | Alembic 迁移、乐观锁、版本号 | 并发更新、迁移 |
 | D5 ✅ | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
 | D6 ✅ | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
-| D7 | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
+| D7 ✅ | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
 | D8 | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
 | D9 | 部署压测 | Docker、compose、Locust 报告 | 交付、瓶颈分析 |
 | D10 | 表达 | 面试版 README、ADR、简历 bullet、20 问 | 权衡与表达 |
@@ -286,18 +286,54 @@ uv run pytest -q                                     # 72 passed
 
 ---
 
-## Day 7 可观测性
+## Day 7 ✅ 可观测性
+
+**问题**：一次回复慢，不知道慢在 planner、校验还是知识检索；用户报"刚才那条错了"，日志里也串不起来是哪次请求。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `shopmate/obs/trace.py` | `TurnTrace`：trace_id、各阶段耗时、token、成本 |
-| `shopmate/obs/logging.py` | JSON 结构化日志 |
-| `shopmate/api/middleware.py` | trace_id 注入日志与响应头 |
-| `shopmate/api/app.py` | `/metrics`（prometheus_client 作为 optional extra） |
+| `shopmate/obs/trace.py` | `TurnTrace`：trace_id、各阶段耗时、最终决策；`stage()` 上下文管理器计时 |
+| `shopmate/obs/metrics.py` | 极简 Counter / Histogram，输出 Prometheus 文本（不引入 prometheus_client） |
+| `shopmate/obs/logging.py` | JSON 格式化 + trace_id 注入 |
+| `shopmate/api/routers/metrics_router.py` | `GET /metrics` |
+| `shopmate/engine/dialogue_engine.py` | 起止 trace、`plan` / `validate` / `session` / `handle_*` 阶段、决策标记 |
+| `task` / `knowledge` / `chitchat` / `clarify` handler | 各自加 `stage()`，任务轨道可细分到 handler |
+| `shopmate/knowledge/handler.py` | Provider 失败降级（`return_exceptions=True`，跳过并 warning） |
+| `tests/test_obs.py`、`tests/test_knowledge_resilience.py` | 新增 7 个用例 |
 
-**验收**：响应头含 `X-Trace-Id`；日志中同一 trace 能串起 planner/route/llm 三段耗时。
+**真实日志（一次 knowledge 轮次）**
+
+```json
+{"level":"INFO","logger":"shopmate.turn","message":"turn completed","event":"turn.completed",
+ "trace_id":"56f65a3a5e6049e3","sender_id":"obs","message_id":"obs-m3","decision":"knowledge",
+ "stages":{"session":0.03,"plan":58.26,"validate":0.01,"knowledge":51.53,"handle_text":109.83},
+ "total_ms":109.91}
+```
+
+**指标**
+
+```text
+shopmate_turns_total{decision="knowledge"} 1
+shopmate_stage_duration_seconds_sum{stage="plan"} 0.05826
+shopmate_stage_duration_seconds_sum{stage="knowledge"} 0.05153
+shopmate_turn_duration_seconds_count 1
+```
+
+**顺带修的真 bug**：mock embedding 接口 404 时，知识轨道整个 500。现在 Provider 并发调用用
+`asyncio.gather(return_exceptions=True)`，挂掉的知识源记 warning 后跳过，剩余资料照常回答。
+
+**验收**
+
+```powershell
+curl.exe -i -X POST http://127.0.0.1:18082/api/chat -H "Content-Type: application/json" -d '{\"sender_id\":\"u1\",\"text\":\"退款多久到账\"}'
+# 响应头 X-Trace-Id；日志里同一个 trace 有 plan/validate/knowledge 三段
+curl.exe http://127.0.0.1:18082/metrics
+uv run pytest -q    # 79 passed
+```
+
+**取舍**：没接 OpenTelemetry，也没算 token 成本——当前没有稳定的 usage 回调；先把"哪一段慢"解决，token 统计留到接真实模型时用 callback 补。
 
 **提交**：`feat(obs): 结构化日志、TurnTrace 与指标端点` / tag `day-07`
 

@@ -11,9 +11,16 @@ from shopmate.domain.messages import (
 )
 from shopmate.domain.state import DialogueState, FocusedObject, Turn
 from shopmate.knowledge.handler import KnowledgeHandler
+from shopmate.obs.trace import (
+    finish_trace,
+    mark_decision,
+    stage,
+    start_trace,
+)
 from shopmate.plan.models import ClarifyReason
 from shopmate.plan.turn_planner import TurnPlanner
 from shopmate.plan.validator import TurnPlanValidator
+from shopmate.api.trace import current_trace_id, new_trace_id
 from shopmate.task.command.models import Command, SetSlotsCommand
 from shopmate.task.flow.models import FlowCatalog
 from shopmate.task.flow.steps import CollectSlotStep
@@ -44,52 +51,69 @@ class DialogueEngine:
         state: DialogueState,
         user_message: UserMessage,
     ) -> ProcessResult:
-        # 客户端超时重试：同一个 message_id 不再重复执行，直接回放上一轮结果
-        duplicated_turn = self._find_duplicated_turn(
-            state, user_message.message_id
+        start_trace(
+            current_trace_id() or new_trace_id(),
+            user_message.sender_id,
+            user_message.message_id,
         )
-        if duplicated_turn is not None:
+
+        try:
+            # 客户端超时重试：同一个 message_id 不再重复执行，直接回放上一轮结果
+            duplicated_turn = self._find_duplicated_turn(
+                state, user_message.message_id
+            )
+            if duplicated_turn is not None:
+                mark_decision("replay")
+                return ProcessResult(
+                    sender_id=user_message.sender_id,
+                    message_id=user_message.message_id,
+                    messages=list(duplicated_turn.bot_messages),
+                )
+
+            with stage("session"):
+                self._prepare_session(state)
+
+            turn = Turn.create(user_message)
+
+            if user_message.type is MessageType.TEXT:
+                with stage("handle_text"):
+                    messages = await self._handle_text_message(
+                        state=state,
+                        user_message=user_message,
+                    )
+            else:
+                with stage("handle_object"):
+                    message_object = user_message.object
+                    if message_object is None:
+                        raise ValueError("对象消息缺少 object 字段。")
+
+                    state.shared.set_focused_object(
+                        FocusedObject(
+                            type=message_object.type,
+                            id=message_object.id,
+                            title=message_object.title,
+                            attributes=dict(message_object.attributes),
+                        )
+                    )
+                    messages = await self._handle_object_message(
+                        message=user_message,
+                        state=state,
+                    )
+
+            turn.bot_messages.extend(messages)
+            state.shared.append_turn(turn)
+            self._remember_message_id(state, user_message.message_id)
+
             return ProcessResult(
                 sender_id=user_message.sender_id,
                 message_id=user_message.message_id,
-                messages=list(duplicated_turn.bot_messages),
+                messages=messages,
             )
-
-        self._prepare_session(state)
-        turn = Turn.create(user_message)
-
-        if user_message.type is MessageType.TEXT:
-            messages = await self._handle_text_message(
-                state=state,
-                user_message=user_message,
-            )
-        else:
-            message_object = user_message.object
-            if message_object is None:
-                raise ValueError("对象消息缺少 object 字段。")
-
-            state.shared.set_focused_object(
-                FocusedObject(
-                    type=message_object.type,
-                    id=message_object.id,
-                    title=message_object.title,
-                    attributes=dict(message_object.attributes),
-                )
-            )
-            messages = await self._handle_object_message(
-                message=user_message,
-                state=state,
-            )
-
-        turn.bot_messages.extend(messages)
-        state.shared.append_turn(turn)
-        self._remember_message_id(state, user_message.message_id)
-
-        return ProcessResult(
-            sender_id=user_message.sender_id,
-            message_id=user_message.message_id,
-            messages=messages,
-        )
+        except Exception:
+            mark_decision("error")
+            raise
+        finally:
+            finish_trace()
 
     # ------------------------------------------------------------ 幂等辅助
     IDEMPOTENCY_WINDOW = 50
@@ -140,21 +164,25 @@ class DialogueEngine:
         state: DialogueState,
         user_message: UserMessage,
     ) -> list[BotMessage]:
-        turn_plan = await self.turn_planner.predict(
-            state,
-            user_message,
-            self.task_handler.flows,
-            self.knowledge_handler.knowledge_intents,
-        )
-        validation = self.turn_plan_validator.validate(
-            turn_plan,
-            state=state,
-            flows=self.task_handler.flows,
-            knowledge_intents=self.knowledge_handler.knowledge_intents,
-        )
+        with stage("plan"):
+            turn_plan = await self.turn_planner.predict(
+                state,
+                user_message,
+                self.task_handler.flows,
+                self.knowledge_handler.knowledge_intents,
+            )
+
+        with stage("validate"):
+            validation = self.turn_plan_validator.validate(
+                turn_plan,
+                state=state,
+                flows=self.task_handler.flows,
+                knowledge_intents=self.knowledge_handler.knowledge_intents,
+            )
 
         if not validation.valid:
             assert validation.reason is not None
+            mark_decision("clarify")
             return await self.clarify_responder.respond(
                 state=state,
                 user_message=user_message,
@@ -162,6 +190,7 @@ class DialogueEngine:
             )
 
         if turn_plan.task is not None:
+            mark_decision("task")
             return await self.task_handler.handle(
                 commands=turn_plan.task.commands,
                 state=state,
@@ -169,6 +198,7 @@ class DialogueEngine:
             )
 
         if turn_plan.knowledge is not None:
+            mark_decision("knowledge")
             if state.tasks.active:
                 state.tasks.suspend_active()
             return await self.knowledge_handler.handle(
@@ -177,6 +207,7 @@ class DialogueEngine:
                 intents=turn_plan.knowledge.intents,
             )
 
+        mark_decision("chitchat")
         if state.tasks.active:
             state.tasks.suspend_active()
         return await self.chitchat_handler.handle(
@@ -197,12 +228,14 @@ class DialogueEngine:
         )
 
         if command is None:
+            mark_decision("clarify")
             return await self.clarify_responder.respond(
                 state=state,
                 user_message=message,
                 reason=ClarifyReason.OBJECT_REQUIRES_INTENT,
             )
 
+        mark_decision("task")
         return await self.task_handler.handle(
             commands=[command],
             state=state,

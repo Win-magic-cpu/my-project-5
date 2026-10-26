@@ -1,5 +1,6 @@
 from shopmate.domain.messages import BotMessage, UserMessage
 from shopmate.domain.state import DialogueState
+from shopmate.obs.trace import stage
 from shopmate.task.command.models import Command
 from shopmate.task.command.processor import CommandProcessor
 from shopmate.task.flow.executor import FlowExecutor
@@ -28,17 +29,18 @@ class TaskHandler:
         state: DialogueState,
         user_message: UserMessage,
     ) -> list[BotMessage]:
-        events = self.command_processor.run(
-            commands,
-            state,
-            self.flows,
-        )
-        messages = self.lifecycle_responder.respond(events)
-        messages.extend(
-            await self.flow_executor.run_task(
+        with stage("task"):
+            events = self.command_processor.run(
+                commands,
                 state,
                 self.flows,
-                user_message,
             )
-        )
-        return messages
+            messages = self.lifecycle_responder.respond(events)
+            messages.extend(
+                await self.flow_executor.run_task(
+                    state,
+                    self.flows,
+                    user_message,
+                )
+            )
+            return messages

@@ -103,6 +103,7 @@ ecommerce-customer-service/
 │  ├─ chitchat/             # 闲聊轨道
 │  ├─ clarify/              # 澄清轨道
 │  ├─ prompts/              # 提示词加载器、历史构造、jinja2 模板
+│  ├─ obs/                  # 结构化日志、TurnTrace 分段耗时、Prometheus 指标
 │  └─ flow_config/          # user_flows.yml：任务流程配置
 ├─ tools/mock_commerce/     # 模拟电商后端（订单/物流/商品）
 ├─ docs/knowledge/          # 政策文档（RAG 语料）
@@ -400,6 +401,33 @@ uv run python eval/run_eval.py --min-accuracy 0.90
 
 预测器可插拔：CI 跑规则 baseline 保证流水线不回归；配了 Key 后加 `--planner llm`，同一套指标评真实模型。报告见 `docs/eval-report.md`。
 
+## 可观测性
+
+一次请求进来会带着 `trace_id` 走完全程，出问题时能回答两个问题：**慢在哪一段、最后走了哪条轨道**。
+
+**结构化日志**（一行一个 JSON，自动带 trace_id）：
+
+```json
+{"ts": "2026-10-26T07:19:58.700Z", "level": "INFO", "logger": "shopmate.turn",
+ "message": "turn completed", "event": "turn.completed",
+ "trace_id": "56f65a3a5e6049e3", "sender_id": "obs", "message_id": "obs-m3",
+ "decision": "knowledge",
+ "stages": {"session": 0.03, "plan": 58.26, "validate": 0.01, "knowledge": 51.53, "handle_text": 109.83},
+ "total_ms": 109.91}
+```
+
+**指标**（`GET /metrics`，Prometheus 文本格式）：
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `shopmate_turns_total{decision}` | counter | 按最终决策分桶的轮次 |
+| `shopmate_turn_duration_seconds` | histogram | 单轮总耗时 |
+| `shopmate_stage_duration_seconds{stage}` | histogram | plan / validate / task / knowledge 等阶段耗时 |
+
+阶段划分直接对应代码里的 `with stage("...")`，没有额外埋点成本；`response` 里的 `X-Trace-Id` 与日志、指标可互相定位。
+
+**降级**：知识轨道并发调用多个 Provider，任一失败只记 warning 并跳过，用剩余资料继续回答——单个知识源挂掉不会让整轮 500。
+
 ## 扩展指南
 
 ### 新增一条任务流程
@@ -449,6 +477,7 @@ uv run pytest -q
 - RAG：Markdown 切分、向量召回排序、来源与分数、阈值兜底
 - 数据库：Alembic 迁移、乐观锁冲突与重试
 - 评估：40 条 golden set 的决策准确率、澄清率与错误接受数
+- 可观测性：阶段耗时、JSON 日志、Prometheus 指标、知识源降级
 
 ## 模块职责
 

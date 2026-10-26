@@ -1,6 +1,7 @@
 from shopmate.chitchat.responder import ChitchatResponder
 from shopmate.domain.messages import BotMessage, UserMessage
 from shopmate.domain.state import DialogueState
+from shopmate.obs.trace import stage
 
 
 class ChitchatHandler:
@@ -14,9 +15,10 @@ class ChitchatHandler:
         state: DialogueState,
         user_message: UserMessage,
     ) -> list[BotMessage]:
-        session = state.shared.current_session
-        recent_turns = session.turns if session else []
-        return await self.responder.respond(
-            user_message=user_message,
-            recent_turns=recent_turns,
-        )
+        with stage("chitchat"):
+            session = state.shared.current_session
+            recent_turns = session.turns if session else []
+            return await self.responder.respond(
+                user_message=user_message,
+                recent_turns=recent_turns,
+            )

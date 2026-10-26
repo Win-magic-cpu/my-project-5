@@ -1,10 +1,14 @@
 import asyncio
+import logging
 
 from shopmate.domain.messages import BotMessage, UserMessage
 from shopmate.domain.state import DialogueState
 from shopmate.knowledge.intents import KnowledgeIntent
 from shopmate.knowledge.registry import KnowledgeProviderRegistry
 from shopmate.knowledge.responder import KnowledgeResponder
+from shopmate.obs.trace import stage
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeHandler:
@@ -26,30 +30,43 @@ class KnowledgeHandler:
         state: DialogueState,
         user_message: UserMessage,
     ) -> list[BotMessage]:
-        provider_ids = self._get_provider_ids_by_intents(intents)
+        with stage("knowledge"):
+            provider_ids = self._get_provider_ids_by_intents(intents)
 
-        retrieve_coroutines = [
-            self.provider_registry.get(provider_id).retrieve(
-                state,
-                user_message,
+            retrieve_coroutines = [
+                self.provider_registry.get(provider_id).retrieve(
+                    state,
+                    user_message,
+                )
+                for provider_id in provider_ids
+            ]
+            # 单个知识源失败（超时、接口 5xx）不应该拖垮整轮对话，
+            # 先跳过它，用剩下的资料继续回答。
+            provider_chunks = await asyncio.gather(
+                *retrieve_coroutines, return_exceptions=True
             )
-            for provider_id in provider_ids
-        ]
-        provider_chunks = await asyncio.gather(*retrieve_coroutines)
-        chunks = [
-            chunk
-            for current_chunks in provider_chunks
-            for chunk in current_chunks
-        ]
 
-        session = state.shared.current_session
-        recent_turns = session.turns if session else []
+            chunks = []
+            for provider_id, current_chunks in zip(
+                provider_ids, provider_chunks
+            ):
+                if isinstance(current_chunks, BaseException):
+                    logger.warning(
+                        "knowledge provider failed: %s (%s)",
+                        provider_id,
+                        type(current_chunks).__name__,
+                    )
+                    continue
+                chunks.extend(current_chunks)
 
-        return await self.knowledge_responder.respond(
-            user_message=user_message,
-            recent_turns=recent_turns,
-            chunks=chunks,
-        )
+            session = state.shared.current_session
+            recent_turns = session.turns if session else []
+
+            return await self.knowledge_responder.respond(
+                user_message=user_message,
+                recent_turns=recent_turns,
+                chunks=chunks,
+            )
 
     def _get_provider_ids_by_intents(
         self,
