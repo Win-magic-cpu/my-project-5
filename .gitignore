@@ -27,3 +27,9 @@ logs/
 # IDE
 .idea/
 .vscode/
+
+# 个人求职材料：只保存在本地，绝不入库
+interview-prep/
+docs/interview/
+面试材料/
+*.resume.md
