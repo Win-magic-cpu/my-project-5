@@ -10,11 +10,11 @@
 
 - 每天的改动都能独立回滚、独立讲；
 - `git log` 本身就是一份演进记录；
-- 面试时可以直接翻某个 tag，说明当时为什么这么设计。
+- 复盘时可以直接翻某个 tag，说明当时为什么这么设计。
 
 ## 总览
 
-| Day | 主题 | 关键产出 | 面试关键词 |
+| Day | 主题 | 关键产出 | 能力关键词 |
 | --- | --- | --- | --- |
 | D1 ✅ | 意图路由 | 2 条新 Flow、规划提示词重写、Slot 白名单、SQLite 目录自愈 | Prompt 工程、注入防护 |
 | D2 ✅ | 会话一致性 | 消息幂等、同用户串行化 | 重试、竞态、分布式锁 |
@@ -25,7 +25,7 @@
 | D7 ✅ | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
 | D8 ✅ | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
 | D9 ✅ | 部署压测 | Docker、compose、Locust 报告 | 交付、瓶颈分析 |
-| D10 | 表达 | 面试版 README、ADR、简历 bullet、20 问 | 权衡与表达 |
+| D10 ✅ | 表达 | README 速览、ADR、CHANGELOG | 权衡与表达 |
 
 ---
 
@@ -205,7 +205,7 @@ uv run pytest -q            # 58 passed
 
 **没有引入 Chroma / numpy**：20 个 chunk 的规模，纯 Python 点积足够；接口（build/search）不变，上量再换 pgvector。
 
-**调参过程（面试可以讲）**
+**调参过程（复盘记录）**
 
 ```text
 chunk 500 / dim 256 / 阈值 0.12：
@@ -386,7 +386,7 @@ uv run pytest -q    # 84 passed
 
 ## Day 9 ✅ 部署与压测
 
-**问题**：面试官不会帮你装 MySQL、起三个进程；也没有任何数字说明这套服务能扛多少。
+**问题**：评审的人不会帮你装 MySQL、起三个进程；也没有任何数字说明这套服务能扛多少。
 
 **改动**
 
@@ -426,21 +426,31 @@ uv run pytest -q                  # 84 passed
 
 ---
 
-## Day 10 表达与面试包
+## Day 10 ✅ 表达与工程文档
 
-**改动**
+**问题**：代码写完了，但仓库首页 30 秒讲不清价值；关键取舍散落在对话和脑子里，外部读者看不到。
+
+**改动（只入库工程文档）**
 
 | 文件 | 动作 |
 | --- | --- |
-| `README.md` | 价值 → 架构 → 指标 → 快速开始 → 目录 → 决策 |
-| `docs/adr/0001-自研-flow-引擎的取舍.md` | 对比硬编码与通用编排框架 |
-| `docs/adr/0002-计划与校验为什么分离.md` | LLM 理解 vs 代码约束 |
-| `docs/adr/0003-状态整存-json-的取舍.md` | 读写模式与迁移成本 |
-| `docs/interview/简历.md` | 3 条带数字的 bullet |
-| `docs/interview/追问.md` | 20 个高频问题 |
-| `CHANGELOG.md` | 按天汇总 |
+| `README.md` | 新增「项目速览」（6 条 Flow、84 单测、95% 评估、55 RPS）与「设计决策」表 |
+| `docs/adr/0001-flow-engine.md` | 自研 YAML 引擎 vs LangGraph / 硬编码 |
+| `docs/adr/0002-plan-validation.md` | 计划与校验为什么分离 |
+| `docs/adr/0003-state-json.md` | 状态整存 JSON + 乐观锁的代价 |
+| `CHANGELOG.md` | 按 Day 1~10 汇总做了什么、为什么 |
 
-**提交**：`docs: 面试版 README、ADR 与问答手册` / tag `v1.0.0`
+**边界**：个人笔记与演示脚本只保存在仓库外，`.gitignore` 已加入相应规则，
+不会因为 `git add -A` 被误提交。
+
+**验收**
+
+```powershell
+uv run pytest -q      # 84 passed
+git status            # 干净
+```
+
+**提交**：`docs: README 速览、ADR 与 CHANGELOG` / tag `v1.0.0`
 
 ---
 
@@ -464,7 +474,7 @@ git push origin main --tags
 
 ## 时间不够时的最小集
 
-D1（已完成）+ D4 + D5 + D6 + D10：并发、RAG、评估、表达四件事齐了，足够撑一场 40 分钟面试。其余作为"下一步计划"讲，比做一半更好。
+D1（已完成）+ D4 + D5 + D6 + D10：并发、RAG、评估、表达四件事齐了，足够支撑一次完整的技术讲解。其余作为"下一步计划"讲，比做一半更好。
 
 ## 三条纪律
 

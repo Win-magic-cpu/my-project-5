@@ -9,6 +9,17 @@
 - **会话状态 + 任务栈管理**：多轮对话、任务切换、任务恢复都有明确的状态模型，并持久化到数据库。
 - **并发安全**：消息幂等、按用户串行、状态乐观锁，重试与并发都不会重复执行或丢更新。
 
+## 项目速览
+
+| 维度 | 现状 |
+| --- | --- |
+| 业务 Flow | 6 条，YAML 配置，新增流程不改代码 |
+| 单测 | 84 个，覆盖 Flow 引擎、校验器、并发、RAG、API、流式 |
+| 离线评估 | 40 条 golden set，决策准确率 95%，误放行 0 |
+| 性能 | 本机单进程：对话链路 ~55 RPS，`/healthz` 818 RPS（[报告](docs/perf.md)） |
+| 可观测性 | 每轮 5 段耗时 + JSON 日志 + Prometheus 指标 |
+| 交付 | Docker 多阶段镜像、compose 四服务、CI（测试 + 评估） |
+
 ## 能力一览
 
 | 轨道 | 说明 | 示例 |
@@ -117,7 +128,9 @@ ecommerce-customer-service/
 ├─ perf/                    # Locust 脚本、零依赖压测脚本与结果
 ├─ tests/                   # 单元测试（Flow、校验器、状态持久化、Engine）
 ├─ docs/ARCHITECTURE.md      # 架构说明与关键取舍
+├─ docs/adr/                 # 架构决策记录（3 篇）
 ├─ docs/10-DAY-PLAN.md       # 10 天迭代计划
+├─ CHANGELOG.md              # 按迭代汇总的变更记录
 ├─ main.py                   # 服务入口
 └─ pyproject.toml
 ```
@@ -561,6 +574,16 @@ uv run pytest -q
 
 架构细节与设计取舍见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+## 设计决策
+
+每个关键取舍都写了 ADR（背景 → 决策 → 代价 → 备选）：
+
+| 决策 | 结论 | 详情 |
+| --- | --- | --- |
+| 流程编排 | 自研 YAML 引擎，不用 LangGraph | [ADR 0001](docs/adr/0001-flow-engine.md) |
+| 理解与执行 | 计划生成与确定性校验分离 | [ADR 0002](docs/adr/0002-plan-validation.md) |
+| 状态存储 | 整份 JSON + 乐观锁，不拆表 | [ADR 0003](docs/adr/0003-state-json.md) |
+
 ## 10 天迭代计划
 
 项目按 10 天螺旋推进，每天一个可独立验收的能力：
@@ -570,7 +593,7 @@ uv run pytest -q
 | Day 1 | 欢迎引导/转人工 Flow、条件分支、规划提示词重写、Slot 白名单 |
 | Day 2–4 | 消息幂等与串行化、统一错误模型、Alembic 迁移与乐观锁 |
 | Day 5–7 | 真实 RAG（切分/向量/引用）、golden set 评估、可观测性 |
-| Day 8–10 | SSE 流式 + 前端 Demo、Docker/压测、面试版 README 与 ADR |
+| Day 8–10 | SSE 流式 + 前端 Demo、Docker/压测、工程文档与 ADR |
 
 详见 [docs/10-DAY-PLAN.md](docs/10-DAY-PLAN.md)。
 
