@@ -1,3 +1,5 @@
+name: shopmate
+
 services:
   mysql:
     image: mysql:8.4
@@ -6,17 +8,74 @@ services:
       MYSQL_ROOT_PASSWORD: "123456"
       MYSQL_DATABASE: customer_service
       TZ: Asia/Shanghai
-    ports:
-      - "3306:3306"
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
       interval: 10s
       timeout: 5s
+      retries: 10
+
+  mock-commerce:
+    build:
+      context: .
+    container_name: shopmate-mock-commerce
+    command: ["uvicorn", "tools.mock_commerce.main:app", "--host", "0.0.0.0", "--port", "18081"]
+    ports:
+      - "18081:18081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18081/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mock-llm:
+    build:
+      context: .
+    container_name: shopmate-mock-llm
+    command: ["uvicorn", "tools.mock_llm.main:app", "--host", "0.0.0.0", "--port", "18083"]
+    ports:
+      - "18083:18083"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18083/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+    container_name: shopmate-api
+    environment:
+      DATABASE_URL: mysql+aiomysql://root:123456@mysql:3306/customer_service?charset=utf8mb4
+      COMMERCE_API_BASE_URL: http://mock-commerce:18081
+      LLM_BASE_URL: http://mock-llm:18083/v1
+      LLM_API_KEY: mock
+      LLM_MODEL: mock
+      EMBEDDING_PROVIDER: mock
+      EMBEDDING_MODEL: mock-embedding
+      # Demo 用：启动自动建表。生产环境应改为 false，先跑 alembic upgrade head
+      AUTO_CREATE_TABLES: "true"
+      APP_HOST: 0.0.0.0
+      APP_PORT: "18082"
+    ports:
+      - "18082:18082"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mock-commerce:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18082/healthz')"]
+      interval: 15s
+      timeout: 3s
       retries: 10
 
 volumes:

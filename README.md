@@ -112,7 +112,9 @@ ecommerce-customer-service/
 ├─ scripts/ingest.py        # 重建 RAG 索引
 ├─ migrations/              # Alembic 迁移脚本
 ├─ alembic.ini              # 迁移配置（URL 由 env.py 注入）
-├─ docker-compose.yml       # 本地 MySQL
+├─ Dockerfile               # 多阶段构建、非 root 运行
+├─ docker-compose.yml       # api + mysql + mock-commerce + mock-llm
+├─ perf/                    # Locust 脚本、零依赖压测脚本与结果
 ├─ tests/                   # 单元测试（Flow、校验器、状态持久化、Engine）
 ├─ docs/ARCHITECTURE.md      # 架构说明与关键取舍
 ├─ docs/10-DAY-PLAN.md       # 10 天迭代计划
@@ -196,6 +198,46 @@ curl "http://127.0.0.1:18082/api/chat/history?sender_id=user_001"
 ```
 
 接口文档：<http://127.0.0.1:18082/docs>
+
+## 部署（Docker）
+
+```bash
+docker compose up -d --build
+```
+
+一条命令拉起四个服务：
+
+| 服务 | 端口 | 说明 |
+| --- | --- | --- |
+| `api` | 18082 | 客服后端（镜像基于 `python:3.12-slim` + uv，非 root 运行） |
+| `mysql` | 3306 | MySQL 8.4（utf8mb4，带 healthcheck） |
+| `mock-commerce` | 18081 | 模拟电商后端 |
+| `mock-llm` | 18083 | 模拟大模型（含 SSE 流式与 embeddings） |
+
+启动后：
+
+- Demo：<http://127.0.0.1:18082/demo/>
+- 接口文档：<http://127.0.0.1:18082/docs>
+- 指标：<http://127.0.0.1:18082/metrics>
+
+停止并清理：`docker compose down -v`。
+
+**生产注意**：compose 里 `AUTO_CREATE_TABLES=true` 只是为了 Demo 开箱即用；正式环境应改为 `false`，先执行 `uv run alembic upgrade head`，再启动服务。
+
+镜像本身没有跑迁移，也不含 dev 依赖；构建时只需 `docker build -t shopmate .`。
+
+## 压测
+
+```bash
+# 零依赖脚本（本仓库实测数据见 docs/perf.md）
+uv run python perf/load_test.py --all
+
+# 或者 Locust（可选依赖）
+uv sync --extra perf
+uv run locust -f perf/locustfile.py --headless -u 20 -r 2 -t 3m --host http://127.0.0.1:18082
+```
+
+本机实测（单进程 + SQLite + mock 模型）：对话链路稳定 **~55 RPS**，`/healthz` 可达 **818 RPS**；并发升高时吞吐不变、延迟上涨，瓶颈在下游模型与写库而不是应用层。完整分析见 [docs/perf.md](docs/perf.md)。
 
 ## 离线演示（无需真实 LLM Key）
 

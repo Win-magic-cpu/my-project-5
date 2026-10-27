@@ -24,7 +24,7 @@
 | D6 ✅ | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
 | D7 ✅ | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
 | D8 ✅ | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
-| D9 | 部署压测 | Docker、compose、Locust 报告 | 交付、瓶颈分析 |
+| D9 ✅ | 部署压测 | Docker、compose、Locust 报告 | 交付、瓶颈分析 |
 | D10 | 表达 | 面试版 README、ADR、简历 bullet、20 问 | 权衡与表达 |
 
 ---
@@ -384,23 +384,43 @@ uv run pytest -q    # 84 passed
 
 ---
 
-## Day 9 部署与压测
+## Day 9 ✅ 部署与压测
+
+**问题**：面试官不会帮你装 MySQL、起三个进程；也没有任何数字说明这套服务能扛多少。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `Dockerfile` | 多阶段构建、非 root 运行 |
-| `docker-compose.yml` | api + mysql + mock-commerce + mock-llm |
-| `perf/locustfile.py` | 20 并发 5 分钟 |
-| `docs/perf.md` | p50/p95、错误率、瓶颈分析 |
+| `Dockerfile` | 两阶段构建（builder 装依赖 → slim 运行），非 root 用户 + HEALTHCHECK |
+| `.dockerignore` | 排除 `.venv`、测试、数据、文档，镜像更小 |
+| `docker-compose.yml` | api + mysql + mock-commerce + mock-llm，带 healthcheck 与依赖顺序 |
+| `perf/load_test.py` | 零依赖 async 压测：并发/总数可配，输出 p50/p95/p99 与错误率 |
+| `perf/locustfile.py` | 标准 Locust 脚本（`uv sync --extra perf`） |
+| `docs/perf.md` | 实测数据 + 瓶颈分析 + 优化清单 |
+| `shopmate/clients/database.py` | SQLite 并发写加 `timeout=30`，避免锁等待直接报错 |
+| `pyproject.toml` | Locust 放进 optional extra `perf`，不进 CI 与镜像 |
+
+**实测结果（本机，单进程 + SQLite + mock 模型）**
+
+```text
+对话链路  5 并发:  55.2 RPS  p50 72ms   p95 157ms  错误 0
+         20 并发:  54.6 RPS  p50 208ms  p95 836ms  错误 0
+         50 并发:  54.7 RPS  p50 717ms  p95 1458ms 错误 0
+/healthz 50 并发: 818.2 RPS  p50 58ms   p95 94ms   错误 0
+```
+
+**结论**：应用层不是瓶颈（818 RPS）；对话链路卡在 ~55 RPS，且吞吐不随并发增长、延迟线性上涨——典型的**下游排队**：mock LLM 单进程 + SQLite 写串行。优化顺序：多 worker/多实例（锁换 Redis）→ MySQL → LLM 限流与连接池。
 
 **验收**
 
 ```powershell
-docker compose up -d
-locust -f perf/locustfile.py --headless -u 20 -r 2 -t 3m --host http://127.0.0.1:18082
+docker compose config --quiet     # 语法校验通过
+uv run python perf/load_test.py --all
+uv run pytest -q                  # 84 passed
 ```
+
+**诚实说明**：本机 Docker Desktop 守护进程未启动，镜像没有实际构建运行，只做了 compose 语法校验；有 Docker 的机器执行 `docker compose up -d --build` 即可，步骤已写进 README。
 
 **提交**：`build: Docker 多阶段镜像与压测报告` / tag `day-09`
 

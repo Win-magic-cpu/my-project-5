@@ -26,6 +26,10 @@ dev = [
     "pytest-asyncio>=0.24.0",
 ]
 
+[project.optional-dependencies]
+# 压测工具单独放，避免 CI 和镜像装 gevent
+perf = ["locust>=2.32.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

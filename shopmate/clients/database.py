@@ -32,7 +32,17 @@ def init_db_engine() -> None:
     """创建异步引擎与会话工厂。"""
     global engine, session_factory
     _ensure_sqlite_directory(settings.database_url)
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+
+    connect_args: dict = {}
+    if settings.database_url.startswith("sqlite"):
+        # 并发写时不要立刻报 "database is locked"，交给 SQLite 排队
+        connect_args = {"timeout": 30}
+
+    engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
