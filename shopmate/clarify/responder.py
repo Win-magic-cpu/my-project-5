@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 
 from langchain_core.output_parsers import StrOutputParser
@@ -89,12 +90,24 @@ class ClarifyResponder:
         with stage("clarify"):
             return await self._respond(state, user_message, reason)
 
-    async def _respond(
+    async def stream(
         self,
         state: DialogueState,
         user_message: UserMessage,
         reason: ClarifyReason,
-    ) -> list[BotMessage]:
+    ) -> AsyncIterator[str]:
+        with stage("clarify"):
+            chain, inputs = self._build(state, user_message, reason)
+            async for delta in chain.astream(inputs):
+                if delta:
+                    yield delta
+
+    def _build(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+        reason: ClarifyReason,
+    ):
         clarify_message = self.build_clarify_message(
             reason=reason,
             state=state,
@@ -120,15 +133,20 @@ class ClarifyResponder:
             template_format="jinja2",
         )
         chain = prompt | get_llm() | StrOutputParser()
+        return chain, {
+            "reason": reason.value,
+            "clarify_message": clarify_message,
+            "focused_object": focused_object,
+            "history": history,
+            "user_message": rendered_user_message,
+        }
 
-        rewritten = await chain.ainvoke(
-            {
-                "reason": reason.value,
-                "clarify_message": clarify_message,
-                "focused_object": focused_object,
-                "history": history,
-                "user_message": rendered_user_message,
-            }
-        )
-
+    async def _respond(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+        reason: ClarifyReason,
+    ) -> list[BotMessage]:
+        chain, inputs = self._build(state, user_message, reason)
+        rewritten = await chain.ainvoke(inputs)
         return [BotMessage(text=rewritten)]

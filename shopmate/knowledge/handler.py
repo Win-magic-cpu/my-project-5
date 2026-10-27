@@ -4,6 +4,7 @@ import logging
 from shopmate.domain.messages import BotMessage, UserMessage
 from shopmate.domain.state import DialogueState
 from shopmate.knowledge.intents import KnowledgeIntent
+from shopmate.knowledge.providers import KnowledgeChunk
 from shopmate.knowledge.registry import KnowledgeProviderRegistry
 from shopmate.knowledge.responder import KnowledgeResponder
 from shopmate.obs.trace import stage
@@ -31,34 +32,9 @@ class KnowledgeHandler:
         user_message: UserMessage,
     ) -> list[BotMessage]:
         with stage("knowledge"):
-            provider_ids = self._get_provider_ids_by_intents(intents)
-
-            retrieve_coroutines = [
-                self.provider_registry.get(provider_id).retrieve(
-                    state,
-                    user_message,
-                )
-                for provider_id in provider_ids
-            ]
-            # 单个知识源失败（超时、接口 5xx）不应该拖垮整轮对话，
-            # 先跳过它，用剩下的资料继续回答。
-            provider_chunks = await asyncio.gather(
-                *retrieve_coroutines, return_exceptions=True
+            chunks = await self.retrieve_chunks(
+                intents, state, user_message
             )
-
-            chunks = []
-            for provider_id, current_chunks in zip(
-                provider_ids, provider_chunks
-            ):
-                if isinstance(current_chunks, BaseException):
-                    logger.warning(
-                        "knowledge provider failed: %s (%s)",
-                        provider_id,
-                        type(current_chunks).__name__,
-                    )
-                    continue
-                chunks.extend(current_chunks)
-
             session = state.shared.current_session
             recent_turns = session.turns if session else []
 
@@ -67,6 +43,42 @@ class KnowledgeHandler:
                 recent_turns=recent_turns,
                 chunks=chunks,
             )
+
+    async def retrieve_chunks(
+        self,
+        intents: list[str],
+        state: DialogueState,
+        user_message: UserMessage,
+    ) -> list[KnowledgeChunk]:
+        provider_ids = self._get_provider_ids_by_intents(intents)
+
+        retrieve_coroutines = [
+            self.provider_registry.get(provider_id).retrieve(
+                state,
+                user_message,
+            )
+            for provider_id in provider_ids
+        ]
+        # 单个知识源失败（超时、接口 5xx）不应该拖垮整轮对话，
+        # 先跳过它，用剩下的资料继续回答。
+        provider_chunks = await asyncio.gather(
+            *retrieve_coroutines, return_exceptions=True
+        )
+
+        chunks: list[KnowledgeChunk] = []
+        for provider_id, current_chunks in zip(
+            provider_ids, provider_chunks
+        ):
+            if isinstance(current_chunks, BaseException):
+                logger.warning(
+                    "knowledge provider failed: %s (%s)",
+                    provider_id,
+                    type(current_chunks).__name__,
+                )
+                continue
+            chunks.extend(current_chunks)
+
+        return chunks
 
     def _get_provider_ids_by_intents(
         self,

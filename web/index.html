@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShopMate · 对话 Demo</title>
+  <style>
+    :root {
+      --bg: #0b1526;
+      --panel: #111e33;
+      --bot: #17304f;
+      --user: #1f6feb;
+      --text: #e8eef7;
+      --muted: #8ea3bf;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(1200px 600px at 50% -10%, #16324f, var(--bg));
+      color: var(--text);
+      font: 15px/1.6 "Microsoft YaHei", system-ui, sans-serif;
+      display: flex;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+    .app { width: min(760px, 100%); display: flex; flex-direction: column; gap: 16px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; }
+    h1 { font-size: 20px; margin: 0; }
+    .meta { color: var(--muted); font-size: 12px; }
+    #messages {
+      background: var(--panel);
+      border: 1px solid #1e3352;
+      border-radius: 16px;
+      padding: 16px;
+      height: 60vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .bubble {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--bot);
+    }
+    .user { align-self: flex-end; background: var(--user); }
+    .bot { align-self: flex-start; }
+    .bot .source { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+    .typing::after { content: "▍"; animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    form { display: flex; gap: 10px; }
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #1e3352;
+      background: var(--panel);
+      color: var(--text);
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #2f6fd0; }
+    button {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 12px;
+      background: var(--user);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .hint { color: var(--muted); font-size: 12px; }
+    .hint a { color: #6ca8ff; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>ShopMate · 对话 Demo</h1>
+      <span class="meta" id="trace">trace: -</span>
+    </header>
+
+    <div id="messages">
+      <div class="bubble bot">你好，我是 ShopMate 电商助手。可以试试：「查一下订单状态」「退款多久到账」「帮我转人工」。</div>
+    </div>
+
+    <form id="form">
+      <input id="input" type="text" autocomplete="off"
+             placeholder="输入消息，回车发送…" />
+      <button id="send" type="submit">发送</button>
+    </form>
+
+    <div class="hint">
+      流式接口：<code>POST /api/chat/stream</code> ·
+      历史记录：<a href="#" id="load-history">加载</a> ·
+      指标：<a href="/metrics" target="_blank">/metrics</a> ·
+      文档：<a href="/docs" target="_blank">/docs</a>
+    </div>
+  </div>
+
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const form = document.getElementById("form");
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const traceEl = document.getElementById("trace");
+
+    const senderId = localStorage.getItem("shopmate_sender") || "web-" + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem("shopmate_sender", senderId);
+
+    function addBubble(role, text = "") {
+      const el = document.createElement("div");
+      el.className = "bubble " + role;
+      el.textContent = text;
+      messagesEl.appendChild(el);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return el;
+    }
+
+    function uuid() {
+      return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
+    }
+
+    // 解析 SSE 帧：event: xxx\ndata: {...}\n\n
+    function parseFrame(frame) {
+      let event = "message";
+      const dataLines = [];
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return null;
+      try {
+        return { event, data: JSON.parse(dataLines.join("\n")) };
+      } catch (err) {
+        return null;
+      }
+    }
+
+    async function send(text) {
+      addBubble("user", text);
+      sendBtn.disabled = true;
+
+      const botBubble = addBubble("bot", "");
+      botBubble.classList.add("typing");
+
+      try {
+        const response = await fetch("/api/chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender_id: senderId,
+            text,
+            message_id: uuid(),
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error("HTTP " + response.status);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let firstToken = true;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let index;
+          while ((index = buffer.indexOf("\n\n")) >= 0) {
+            const frame = buffer.slice(0, index);
+            buffer = buffer.slice(index + 2);
+            const parsed = parseFrame(frame);
+            if (!parsed) continue;
+
+            if (parsed.event === "start") {
+              traceEl.textContent = "trace: " + parsed.data.trace_id.slice(0, 12);
+            } else if (parsed.event === "token") {
+              if (firstToken) {
+                botBubble.textContent = "";
+                firstToken = false;
+              }
+              botBubble.textContent += parsed.data.text;
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+            } else if (parsed.event === "message") {
+              if (firstToken) {
+                botBubble.textContent = parsed.data.text || "";
+                firstToken = false;
+              } else {
+                addBubble("bot", parsed.data.text || "");
+              }
+            } else if (parsed.event === "done") {
+              botBubble.classList.remove("typing");
+              if (!botBubble.textContent) botBubble.textContent = "（无回复）";
+              traceEl.textContent = "trace: " + String(parsed.data.message_id || "").slice(0, 12) +
+                                     " · " + parsed.data.decision + " · " + parsed.data.total_ms + "ms";
+            } else if (parsed.event === "error") {
+              botBubble.classList.remove("typing");
+              botBubble.textContent = "出错了：" + parsed.data.message;
+            }
+          }
+        }
+      } catch (err) {
+        botBubble.classList.remove("typing");
+        botBubble.textContent = "请求失败：" + err.message;
+      } finally {
+        botBubble.classList.remove("typing");
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      send(text);
+    });
+
+    document.getElementById("load-history").addEventListener("click", async (event) => {
+      event.preventDefault();
+      const response = await fetch("/api/chat/history?sender_id=" + encodeURIComponent(senderId) + "&limit=50");
+      if (!response.ok) return;
+      const payload = await response.json();
+      messagesEl.innerHTML = "";
+      for (const message of payload.messages) {
+        addBubble(message.role === "user" ? "user" : "bot", message.text || "（对象消息）");
+      }
+    });
+  </script>
+</body>
+</html>

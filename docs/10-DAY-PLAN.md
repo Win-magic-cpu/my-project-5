@@ -1,6 +1,6 @@
 # 10 天迭代计划
 
-> 基线：当前仓库（完整可运行、79 个测试全绿、支持离线全链路演示）
+> 基线：当前仓库（完整可运行、84 个测试全绿、支持离线全链路演示）
 > 目标：把「能跑」做成「能讲」——补齐一致性、数据层、RAG、评估、可观测性、交付与表达。
 > 节奏：每天 2~4 小时，当天跑通测试并提交，打一个 `day-NN` 标签。
 
@@ -23,7 +23,7 @@
 | D5 ✅ | 真实 RAG | 文档切分、向量检索、引用来源 | RAG、召回、幻觉抑制 |
 | D6 ✅ | 评估体系 | 40 条 golden set、离线指标、CI 阈值 | 效果可度量、回归 |
 | D7 ✅ | 可观测性 | 结构化日志、TurnTrace、Prometheus | 线上排障、成本 |
-| D8 | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
+| D8 ✅ | 流式 + Demo | SSE 流式、零构建前端 | 体验、流式与编排冲突 |
 | D9 | 部署压测 | Docker、compose、Locust 报告 | 交付、瓶颈分析 |
 | D10 | 表达 | 面试版 README、ADR、简历 bullet、20 问 | 权衡与表达 |
 
@@ -339,18 +339,46 @@ uv run pytest -q    # 79 passed
 
 ---
 
-## Day 8 流式输出与 Demo
+## Day 8 ✅ 流式输出与 Demo
 
-**关键取舍**：任务型必须先跑完 Flow 才知道回复内容，所以只有 knowledge/chitchat 真正逐 token 流式；任务轨道用多段事件模拟渐进反馈。
+**问题**：一次性等 5 秒再返回整段回复，用户会以为卡住；也没有一个能点开就看的页面。
 
 **改动**
 
 | 文件 | 动作 |
 | --- | --- |
-| `shopmate/api/routers/chat_router.py` | `POST /api/chat/stream`，`text/event-stream` |
-| `shopmate/engine/dialogue_engine.py` | `stream_message` |
-| `web/index.html` | 原生 JS + `ReadableStream`，零构建 |
-| `docs/demo.png` | 截图 |
+| `shopmate/domain/streaming.py` | `StreamEvent`（start / token / message / done / error） |
+| `shopmate/engine/dialogue_engine.py` | `stream_message`：plan → 分流 → 逐 token 或逐条推送 → 提交 Turn |
+| `shopmate/knowledge/responder.py`、`chitchat`、`clarify` | 抽出 `_build()`，新增 `stream()` 用 `chain.astream` |
+| `shopmate/knowledge/handler.py` | 抽出 `retrieve_chunks()`，流式路径复用同一套检索 |
+| `shopmate/service/dialogue_service.py` | `stream_message`：锁 + `finally` 保存状态 |
+| `shopmate/api/routers/chat_router.py` | `POST /api/chat/stream`（SSE）、`format_sse()` |
+| `shopmate/api/app.py` | 挂载 `web/` 到 `/demo` |
+| `web/index.html` | 单文件原生 JS，打字机效果 + 历史加载 |
+| `tools/mock_llm/main.py` | 支持 `stream=true` 的 SSE 分块（真机联调需要） |
+| `tests/test_stream.py` | 新增 5 个用例 |
+
+**关键取舍**：任务型必须先跑完 Flow 才知道回复内容，所以只有 knowledge / chitchat / clarify 真正逐 token；任务轨道用 `message` 事件按条推送。
+
+**真机验证**
+
+```text
+GET  /demo/                 -> 200（8 KB 单页）
+POST /api/chat/stream       -> 200
+事件统计：start 1 / token 15 / done 1
+```
+
+联调时发现 mock LLM 不支持 `stream=true`，langchain 的 `astream` 解析普通 JSON 会抛错——顺手补了 SSE 分块输出，这也是"流式链路必须端到端验证"的例子。
+
+**验收**
+
+```powershell
+curl.exe -N -X POST http://127.0.0.1:18082/api/chat/stream -H "Content-Type: application/json" -d '{\"sender_id\":\"web-demo\",\"text\":\"退款多久到账\"}'
+# event: start → event: token × N → event: done
+uv run pytest -q    # 84 passed
+```
+
+**取舍**：没有做 WebSocket，SSE 对"服务端单向推送"足够且实现简单；前端不引入框架，保证 clone 下来直接能看。
 
 **提交**：`feat(stream): SSE 流式回复与最小前端` / tag `day-08`
 

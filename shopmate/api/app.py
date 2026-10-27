@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from shopmate.api.dependencies import init_dialogue_engine
 from shopmate.api.errors import register_exception_handlers
@@ -17,8 +18,10 @@ from shopmate.clients.http_client import (
     close_http_client,
     init_http_client,
 )
-from shopmate.conf.config import settings
+from shopmate.conf.config import PROJECT_ROOT, settings
 from shopmate.obs.logging import configure_logging
+
+WEB_DIR = PROJECT_ROOT / "web"
 
 
 @asynccontextmanager
@@ -51,3 +54,11 @@ register_trace_middleware(app)
 app.include_router(chat_router)
 app.include_router(health_router)
 app.include_router(metrics_router)
+
+# 最小前端 Demo：http://127.0.0.1:18082/demo/
+if WEB_DIR.exists():
+    app.mount(
+        "/demo",
+        StaticFiles(directory=WEB_DIR, html=True),
+        name="demo",
+    )

@@ -106,6 +106,7 @@ ecommerce-customer-service/
 │  ├─ obs/                  # 结构化日志、TurnTrace 分段耗时、Prometheus 指标
 │  └─ flow_config/          # user_flows.yml：任务流程配置
 ├─ tools/mock_commerce/     # 模拟电商后端（订单/物流/商品）
+├─ web/index.html           # 零构建前端 Demo（SSE 打字机效果）
 ├─ docs/knowledge/          # 政策文档（RAG 语料）
 ├─ eval/                    # 离线评估：golden set、指标、报告
 ├─ scripts/ingest.py        # 重建 RAG 索引
@@ -427,6 +428,28 @@ uv run python eval/run_eval.py --min-accuracy 0.90
 阶段划分直接对应代码里的 `with stage("...")`，没有额外埋点成本；`response` 里的 `X-Trace-Id` 与日志、指标可互相定位。
 
 **降级**：知识轨道并发调用多个 Provider，任一失败只记 warning 并跳过，用剩余资料继续回答——单个知识源挂掉不会让整轮 500。
+
+## 流式输出与 Demo
+
+`POST /api/chat/stream` 返回 SSE，事件顺序固定：
+
+| 事件 | 数据 | 说明 |
+| --- | --- | --- |
+| `start` | `trace_id`、`message_id` | 请求已受理 |
+| `token` | `text` | 模型增量文本（知识/闲聊/澄清） |
+| `message` | `index`、`text` | 任务型轨道按条推送的完整消息 |
+| `done` | `decision`、`total_ms`、`messages` | 本轮结束 |
+| `error` | `code`、`message` | 生成中途失败（HTTP 状态已是 200） |
+
+```bash
+curl -N -X POST http://127.0.0.1:18082/api/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"sender_id":"web-demo","text":"退款多久到账"}'
+```
+
+打开 <http://127.0.0.1:18082/demo/> 可以直接体验打字机效果，页面是单文件原生 JS，没有构建步骤。
+
+**关键取舍**：任务型对话必须跑完 Flow 才知道回复内容，所以只有 knowledge / chitchat / clarify 真正逐 token 流式；任务轨道用 `message` 事件按条推送，前端同样有渐进反馈。断连时 `finally` 仍会保存已发生的状态（会话、任务进度）。
 
 ## 扩展指南
 

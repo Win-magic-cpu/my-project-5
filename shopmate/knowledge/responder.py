@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
@@ -18,6 +20,32 @@ class KnowledgeResponder:
         recent_turns: list[Turn],
         chunks: list[KnowledgeChunk],
     ) -> list[BotMessage]:
+        chain, inputs = self._build(
+            user_message, recent_turns, chunks
+        )
+        response = await chain.ainvoke(inputs)
+        return [BotMessage(text=response)]
+
+    async def stream(
+        self,
+        user_message: UserMessage,
+        recent_turns: list[Turn],
+        chunks: list[KnowledgeChunk],
+    ) -> AsyncIterator[str]:
+        """逐 token 产出，供 SSE 使用。"""
+        chain, inputs = self._build(
+            user_message, recent_turns, chunks
+        )
+        async for delta in chain.astream(inputs):
+            if delta:
+                yield delta
+
+    def _build(
+        self,
+        user_message: UserMessage,
+        recent_turns: list[Turn],
+        chunks: list[KnowledgeChunk],
+    ):
         rendered_user_message = HistoryBuilder.render_user_message(
             user_message
         )
@@ -32,16 +60,11 @@ class KnowledgeResponder:
             template_format="jinja2",
         )
         chain = prompt | get_llm() | StrOutputParser()
-
-        response = await chain.ainvoke(
-            {
-                "user_message": rendered_user_message,
-                "history": history,
-                "knowledge_content": knowledge_content,
-            }
-        )
-
-        return [BotMessage(text=response)]
+        return chain, {
+            "user_message": rendered_user_message,
+            "history": history,
+            "knowledge_content": knowledge_content,
+        }
 
     @staticmethod
     def _format_chunk(index: int, chunk: KnowledgeChunk) -> str:

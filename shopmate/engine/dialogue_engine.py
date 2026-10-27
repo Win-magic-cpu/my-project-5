@@ -1,4 +1,5 @@
 import time
+from collections.abc import AsyncIterator
 
 from shopmate.chitchat.handler import ChitchatHandler
 from shopmate.clarify.responder import ClarifyResponder
@@ -10,8 +11,10 @@ from shopmate.domain.messages import (
     UserMessage,
 )
 from shopmate.domain.state import DialogueState, FocusedObject, Turn
+from shopmate.domain.streaming import StreamEvent
 from shopmate.knowledge.handler import KnowledgeHandler
 from shopmate.obs.trace import (
+    current_trace,
     finish_trace,
     mark_decision,
     stage,
@@ -159,11 +162,11 @@ class DialogueEngine:
             state.shared.start_session()
 
     # ------------------------------------------------------------------ 文本
-    async def _handle_text_message(
+    async def _plan_turn(
         self,
         state: DialogueState,
         user_message: UserMessage,
-    ) -> list[BotMessage]:
+    ):
         with stage("plan"):
             turn_plan = await self.turn_planner.predict(
                 state,
@@ -179,6 +182,17 @@ class DialogueEngine:
                 flows=self.task_handler.flows,
                 knowledge_intents=self.knowledge_handler.knowledge_intents,
             )
+
+        return turn_plan, validation
+
+    async def _handle_text_message(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+    ) -> list[BotMessage]:
+        turn_plan, validation = await self._plan_turn(
+            state, user_message
+        )
 
         if not validation.valid:
             assert validation.reason is not None
@@ -213,6 +227,191 @@ class DialogueEngine:
         return await self.chitchat_handler.handle(
             state=state,
             user_message=user_message,
+        )
+
+    # ------------------------------------------------------------------ 流式
+    async def stream_message(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+    ) -> AsyncIterator[StreamEvent]:
+        """SSE 版本：先 start，再 token/message，最后 done。
+
+        任务型必须跑完 Flow 才知道回复内容，所以按条推送；
+        知识/闲聊/澄清是模型生成，可以逐 token 推。
+        """
+        trace = start_trace(
+            current_trace_id() or new_trace_id(),
+            user_message.sender_id,
+            user_message.message_id,
+        )
+        sink: list[BotMessage] = []
+
+        try:
+            yield StreamEvent(
+                "start",
+                {
+                    "trace_id": trace.trace_id,
+                    "message_id": user_message.message_id,
+                },
+            )
+
+            duplicated = self._find_duplicated_turn(
+                state, user_message.message_id
+            )
+            if duplicated is not None:
+                mark_decision("replay")
+                for index, message in enumerate(duplicated.bot_messages):
+                    sink.append(message)
+                    yield StreamEvent(
+                        "message",
+                        {"index": index, "text": message.text},
+                    )
+                yield self._done_event(message.message_id, len(sink))
+                return
+
+            with stage("session"):
+                self._prepare_session(state)
+
+            turn = Turn.create(user_message)
+
+            if user_message.type is MessageType.TEXT:
+                async for event in self._stream_text_turn(
+                    state, user_message, sink
+                ):
+                    yield event
+            else:
+                async for event in self._stream_object_turn(
+                    state, user_message, sink
+                ):
+                    yield event
+
+            turn.bot_messages.extend(sink)
+            state.shared.append_turn(turn)
+            self._remember_message_id(state, user_message.message_id)
+
+            yield self._done_event(user_message.message_id, len(sink))
+        except Exception:
+            mark_decision("error")
+            yield StreamEvent(
+                "error",
+                {
+                    "code": "internal_error",
+                    "message": "服务内部错误，请稍后重试",
+                },
+            )
+        finally:
+            finish_trace()
+
+    async def _stream_text_turn(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+        sink: list[BotMessage],
+    ) -> AsyncIterator[StreamEvent]:
+        turn_plan, validation = await self._plan_turn(
+            state, user_message
+        )
+
+        if not validation.valid:
+            assert validation.reason is not None
+            mark_decision("clarify")
+            accumulated: list[str] = []
+            async for delta in self.clarify_responder.stream(
+                state, user_message, validation.reason
+            ):
+                accumulated.append(delta)
+                yield StreamEvent("token", {"text": delta})
+            sink.append(BotMessage(text="".join(accumulated)))
+            return
+
+        if turn_plan.task is not None:
+            mark_decision("task")
+            produced = await self.task_handler.handle(
+                commands=turn_plan.task.commands,
+                state=state,
+                user_message=user_message,
+            )
+            for index, message in enumerate(produced):
+                sink.append(message)
+                yield StreamEvent(
+                    "message", {"index": index, "text": message.text}
+                )
+            return
+
+        if turn_plan.knowledge is not None:
+            mark_decision("knowledge")
+            if state.tasks.active:
+                state.tasks.suspend_active()
+            chunks = await self.knowledge_handler.retrieve_chunks(
+                turn_plan.knowledge.intents, state, user_message
+            )
+            session = state.shared.current_session
+            recent_turns = session.turns if session else []
+            accumulated: list[str] = []
+            async for delta in self.knowledge_handler.knowledge_responder.stream(
+                user_message, recent_turns, chunks
+            ):
+                accumulated.append(delta)
+                yield StreamEvent("token", {"text": delta})
+            sink.append(
+                BotMessage(text="".join(accumulated) or "未检索到相关信息")
+            )
+            return
+
+        mark_decision("chitchat")
+        if state.tasks.active:
+            state.tasks.suspend_active()
+        accumulated = []
+        async for delta in self.chitchat_handler.stream(
+            state, user_message
+        ):
+            accumulated.append(delta)
+            yield StreamEvent("token", {"text": delta})
+        sink.append(BotMessage(text="".join(accumulated)))
+
+    async def _stream_object_turn(
+        self,
+        state: DialogueState,
+        user_message: UserMessage,
+        sink: list[BotMessage],
+    ) -> AsyncIterator[StreamEvent]:
+        message_object = user_message.object
+        if message_object is None:
+            raise ValueError("对象消息缺少 object 字段。")
+
+        state.shared.set_focused_object(
+            FocusedObject(
+                type=message_object.type,
+                id=message_object.id,
+                title=message_object.title,
+                attributes=dict(message_object.attributes),
+            )
+        )
+        produced = await self._handle_object_message(
+            message=user_message,
+            state=state,
+        )
+        for index, message in enumerate(produced):
+            sink.append(message)
+            yield StreamEvent(
+                "message", {"index": index, "text": message.text}
+            )
+
+    def _done_event(
+        self,
+        message_id: str,
+        message_count: int,
+    ) -> StreamEvent:
+        trace = current_trace()
+        return StreamEvent(
+            "done",
+            {
+                "message_id": message_id,
+                "decision": trace.decision if trace else "unknown",
+                "total_ms": trace.total_ms if trace else 0,
+                "messages": message_count,
+            },
         )
 
     # ------------------------------------------------------------------ 对象

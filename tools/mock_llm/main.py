@@ -17,6 +17,7 @@ import json
 import re
 
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 
 app = FastAPI(title="模拟大模型服务", version="0.1.0")
 
@@ -146,13 +147,19 @@ def _hash_vector(text: str, dim: int = 64) -> list[float]:
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request) -> dict:
+async def chat_completions(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
     prompt = "\n".join(
         str(message.get("content", "")) for message in messages
     )
     content = _reply_for(prompt)
+
+    if body.get("stream"):
+        return StreamingResponse(
+            _stream_chunks(content, body.get("model", "mock")),
+            media_type="text/event-stream",
+        )
 
     return {
         "id": "chatcmpl-mock",
@@ -172,6 +179,37 @@ async def chat_completions(request: Request) -> dict:
             "total_tokens": 0,
         },
     }
+
+
+async def _stream_chunks(content: str, model: str):
+    """按 OpenAI 的 SSE 分块格式返回，供 langchain 的 astream 解析。"""
+    for start in range(0, len(content), 4):
+        delta = {
+            "id": "chatcmpl-mock",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": content[start : start + 4]},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+
+    stop = {
+        "id": "chatcmpl-mock",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [
+            {"index": 0, "delta": {}, "finish_reason": "stop"}
+        ],
+    }
+    yield f"data: {json.dumps(stop, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 @app.get("/health")

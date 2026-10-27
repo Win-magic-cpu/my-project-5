@@ -1,7 +1,9 @@
 import asyncio
+from collections.abc import AsyncIterator
 
 from shopmate.domain.messages import ProcessResult, UserMessage
 from shopmate.domain.state import DialogueState
+from shopmate.domain.streaming import StreamEvent
 from shopmate.engine.dialogue_engine import DialogueEngine
 from shopmate.repository.dialogue_state_repository import (
     DialogueStateRepository,
@@ -59,6 +61,24 @@ class DialogueService:
 
         assert last_error is not None
         raise last_error
+
+    async def stream_message(
+        self,
+        user_message: UserMessage,
+    ) -> AsyncIterator[StreamEvent]:
+        """流式处理：锁和状态保存都要覆盖整个生成过程。"""
+        async with self.sender_locks.get(user_message.sender_id):
+            state = await self.dialogue_state_repository.load_state(
+                user_message.sender_id
+            )
+            try:
+                async for event in self.dialogue_engine.stream_message(
+                    state, user_message
+                ):
+                    yield event
+            finally:
+                # 中途断连也要把已经发生的状态（会话、任务）落库
+                await self.dialogue_state_repository.save_state(state)
 
     async def get_state(self, sender_id: str) -> DialogueState:
         """只读取状态，供历史记录接口使用。"""

@@ -1,6 +1,8 @@
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 
 from shopmate.api.dependencies import get_dialogue_service
 from shopmate.api.schemas import (
@@ -18,6 +20,7 @@ from shopmate.domain.messages import (
     UserMessage,
 )
 from shopmate.domain.state import DialogueState
+from shopmate.domain.streaming import StreamEvent
 from shopmate.service.dialogue_service import DialogueService
 
 chat_router = APIRouter(tags=["chat"])
@@ -31,6 +34,34 @@ async def chat(
     user_message = _build_user_message(chat_request)
     process_result = await dialogue_service.process_message(user_message)
     return _build_chat_response(process_result)
+
+
+@chat_router.post("/api/chat/stream")
+async def chat_stream(
+    chat_request: ChatRequest,
+    dialogue_service: DialogueService = Depends(get_dialogue_service),
+) -> StreamingResponse:
+    """SSE 流式接口：start → token/message → done（出错时 error）。"""
+    user_message = _build_user_message(chat_request)
+
+    async def event_source():
+        async for event in dialogue_service.stream_message(user_message):
+            payload = json.dumps(event.data, ensure_ascii=False)
+            yield f"event: {event.type}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def format_sse(event: StreamEvent) -> str:
+    payload = json.dumps(event.data, ensure_ascii=False)
+    return f"event: {event.type}\ndata: {payload}\n\n"
 
 
 @chat_router.get("/api/chat/history")
